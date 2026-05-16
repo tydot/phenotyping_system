@@ -8,6 +8,7 @@ ARM 功能表型系统
 3. 临床指标来自当前版本 clinical_with_clusters / merged_clinical_all。
 4. raw_row = 临床合并行 + 当前版本分型行。
 5. LLM 解释层只解释结构化结果，不参与分型。
+6. VLM / FR-GCD-Lite 只作为图像侧区域辅助解释，不参与分型，不修改 cluster。
 """
 
 import sys
@@ -16,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import streamlit.components.v1 as components
 import tempfile
 import os
+
 from dotenv import load_dotenv, dotenv_values
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -25,6 +27,9 @@ if str(ROOT_DIR) not in sys.path:
 # 必须在导入 llm_client 之前读取 .env
 ENV_PATH = ROOT_DIR / ".env"
 load_dotenv(ENV_PATH, override=True)
+
+from backend.vlm.region_guided_decoder import generate_region_findings
+from backend.vlm.consistency_gate import check_visual_clinical_consistency
 
 env_values = dotenv_values(ENV_PATH)
 for key in [
@@ -44,7 +49,7 @@ for key in [
 import numpy as np
 import pandas as pd
 import streamlit as st
-
+from PIL import Image
 from backend.api.patient import get_patient_view
 from backend.auth.auth_service import require_login, can_view_patient
 from backend.version_manager import (
@@ -779,6 +784,572 @@ def resolve_gender_display(patient: Dict[str, Any], gender_meta: Dict[str, Any])
     }
 
 
+# ============================================================
+# VLM / FR-GCD-Lite 辅助函数
+# ============================================================
+
+# ============================================================
+# VLM / FR-GCD-Lite 辅助函数
+# ============================================================
+
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+NON_IMAGE_EXTENSIONS = {".npy", ".npz", ".csv", ".pkl", ".pt", ".pth", ".json", ".txt"}
+
+
+def _clean_path_value(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+
+    s = str(value).strip()
+    if not s or s.lower() in {"nan", "none", "null", "-"}:
+        return None
+
+    return s
+
+
+def _resolve_candidate_path(path_value: Any) -> Optional[str]:
+    """
+    只接受真实图片路径。
+    明确排除 .npy / .npz / .csv / .pkl / .pt 等非图像文件。
+    """
+    s = _clean_path_value(path_value)
+    if not s:
+        return None
+
+    suffix = Path(s).suffix.lower()
+
+    if suffix in NON_IMAGE_EXTENSIONS:
+        return None
+
+    if suffix and suffix not in IMAGE_EXTENSIONS:
+        return None
+
+    p = Path(s)
+    if p.exists() and p.suffix.lower() in IMAGE_EXTENSIONS:
+        return str(p)
+
+    p2 = ROOT_DIR / s
+    if p2.exists() and p2.suffix.lower() in IMAGE_EXTENSIONS:
+        return str(p2)
+
+    # Windows 绝对图片路径，例如 H:/xxx/xxx.png
+    if suffix in IMAGE_EXTENSIONS and (":" in s or s.startswith("\\\\")):
+        return s
+
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def find_image_by_stem(image_root_dir: str, filename_or_path: str) -> Optional[str]:
+    """
+    根据 top-k 里的 .npy 文件名，在预处理图像目录里查找同名 .png/.jpg。
+
+    例如：
+    210259070-王玲-2024-3-1-Contraction(压肛收缩)-1.npy
+
+    匹配：
+    210259070-王玲-2024-3-1-Contraction(压肛收缩)-1.png
+    """
+    image_root_dir = _clean_path_value(image_root_dir)
+    filename_or_path = _clean_path_value(filename_or_path)
+
+    if not image_root_dir or not filename_or_path:
+        return None
+
+    root = Path(image_root_dir)
+    if not root.exists():
+        return None
+
+    stem = Path(filename_or_path).stem
+
+    # 先查当前目录
+    for ext in IMAGE_EXTENSIONS:
+        candidate = root / f"{stem}{ext}"
+        if candidate.exists():
+            return str(candidate)
+
+    # 再递归查子目录
+    for ext in IMAGE_EXTENSIONS:
+        matches = list(root.rglob(f"{stem}{ext}"))
+        if matches:
+            return str(matches[0])
+
+    return None
+
+
+def resolve_patient_image_path(
+    patient: Dict[str, Any],
+    raw_row: Dict[str, Any],
+    representation: Dict[str, Any],
+    protocol_topk_details: List[Any],
+    image_root_dir: Optional[str] = None,
+) -> Optional[str]:
+    """
+    从多个来源寻找患者图像路径。
+
+    优先级：
+    1. 如果已有明确 PNG/JPG 路径，直接使用；
+    2. 如果 top-k 里只有 .npy filename，则到 image_root_dir 中查找同名 PNG/JPG；
+    3. 找不到则返回 None，不影响主模型展示。
+    """
+
+    image_path_keys = [
+        "image_path",
+        "vlm_input_path",
+        "pressure_image_path",
+        "arm_image_path",
+        "heatmap_path",
+        "frame_path",
+        "topk_image_path",
+        "png_path",
+        "jpg_path",
+        "jpeg_path",
+        "img_path",
+        "crop_path",
+    ]
+
+    filename_keys = [
+        "filename",
+        "file_name",
+        "npy_path",
+        "feature_path",
+        "path",
+    ]
+
+    sources = [
+        safe_dict(raw_row),
+        safe_dict(patient),
+        safe_dict(representation),
+    ]
+
+    # 1. 先找明确图片路径
+    for source in sources:
+        for key in image_path_keys:
+            candidate = _resolve_candidate_path(source.get(key))
+            if candidate:
+                return candidate
+
+    for item in safe_list(protocol_topk_details):
+        item = safe_dict(item)
+        for key in image_path_keys:
+            candidate = _resolve_candidate_path(item.get(key))
+            if candidate:
+                return candidate
+
+    # 2. 再用 top-k 的 .npy 文件名去预处理图像目录找同名 png/jpg
+    if image_root_dir:
+        for item in safe_list(protocol_topk_details):
+            item = safe_dict(item)
+
+            for key in filename_keys:
+                raw_name = item.get(key)
+                if not raw_name:
+                    continue
+
+                matched_image = find_image_by_stem(
+                    image_root_dir=image_root_dir,
+                    filename_or_path=str(raw_name),
+                )
+
+                if matched_image:
+                    return matched_image
+
+    return None
+PROTOCOL_DISPLAY_ORDER = [
+    "RestPressure",
+    "Contraction",
+    "Defecation",
+    "rair",
+    "Cough",
+]
+
+
+def infer_protocol_from_text(value: Any) -> Optional[str]:
+    """
+    从协议名、文件名或路径文本中推断 ARM 协议阶段。
+    """
+    text = str(value or "").lower()
+
+    if "restpressure" in text or "静息" in text:
+        return "RestPressure"
+
+    if (
+        "contraction" in text
+        or "squeeze" in text
+        or "提肛" in text
+        or "缩榨" in text
+        or "压肛" in text
+    ):
+        return "Contraction"
+
+    if "defecation" in text or "排便" in text:
+        return "Defecation"
+
+    if "rair" in text:
+        return "rair"
+
+    if "cough" in text or "咳嗽" in text:
+        return "Cough"
+
+    # 最后再做宽松 rest 匹配，避免误伤其它路径文本
+    if "rest" in text:
+        return "RestPressure"
+
+    return None
+
+
+def resolve_patient_image_paths_by_protocol(
+    patient: Dict[str, Any],
+    raw_row: Dict[str, Any],
+    representation: Dict[str, Any],
+    protocol_topk_details: List[Any],
+    image_root_dir: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    为同一患者解析多个协议阶段的图像。
+
+    当前策略：
+    - 每个协议阶段最多取 1 张图；
+    - 优先使用 top-k 关键帧中的 filename；
+    - 用 filename 的 stem 去 preprocessed_features 中匹配同名 .png/.jpg；
+    - 找不到则跳过，不影响主模型展示。
+    """
+
+    image_path_keys = [
+        "image_path",
+        "vlm_input_path",
+        "pressure_image_path",
+        "arm_image_path",
+        "heatmap_path",
+        "frame_path",
+        "topk_image_path",
+        "png_path",
+        "jpg_path",
+        "jpeg_path",
+        "img_path",
+        "crop_path",
+    ]
+
+    filename_keys = [
+        "filename",
+        "file_name",
+        "npy_path",
+        "feature_path",
+        "path",
+    ]
+
+    results: Dict[str, Dict[str, Any]] = {}
+
+    # 1. 优先从 protocol_topk_details 里找每个协议的一张代表图
+    for item in safe_list(protocol_topk_details):
+        item = safe_dict(item)
+
+        protocol_text = " ".join(
+            [
+                str(item.get("protocol", "")),
+                str(item.get("filename", "")),
+                str(item.get("path", "")),
+                str(item.get("image_path", "")),
+                str(item.get("frame_path", "")),
+            ]
+        )
+
+        protocol = infer_protocol_from_text(protocol_text)
+        if not protocol:
+            continue
+
+        # 每个协议阶段只取第一张代表图
+        if protocol in results:
+            continue
+
+        matched_image = None
+
+        # 1.1 已经有明确图片路径
+        for key in image_path_keys:
+            matched_image = _resolve_candidate_path(item.get(key))
+            if matched_image:
+                break
+
+        # 1.2 只有 .npy filename，则去预处理图像目录找同名 .png/.jpg
+        if not matched_image and image_root_dir:
+            for key in filename_keys:
+                raw_name = item.get(key)
+                if not raw_name:
+                    continue
+
+                matched_image = find_image_by_stem(
+                    image_root_dir=image_root_dir,
+                    filename_or_path=str(raw_name),
+                )
+
+                if matched_image:
+                    break
+
+        if matched_image:
+            results[protocol] = {
+                "protocol": protocol,
+                "image_path": matched_image,
+                "source_item": item,
+                "filename": item.get("filename")
+                or item.get("path")
+                or Path(matched_image).name,
+                "rank": item.get("rank"),
+                "score": item.get("score"),
+                "weight": item.get("weight"),
+            }
+
+    # 2. 兜底：如果 top-k 里没有可匹配图片，就沿用原来的单图逻辑
+    if not results:
+        fallback_image = resolve_patient_image_path(
+            patient=patient,
+            raw_row=raw_row,
+            representation=representation,
+            protocol_topk_details=protocol_topk_details,
+            image_root_dir=image_root_dir,
+        )
+
+        if fallback_image:
+            protocol = infer_protocol_from_text(fallback_image) or "Unknown"
+            results[protocol] = {
+                "protocol": protocol,
+                "image_path": fallback_image,
+                "source_item": {},
+                "filename": Path(fallback_image).name,
+                "rank": None,
+                "score": None,
+                "weight": None,
+            }
+
+    ordered_results: List[Dict[str, Any]] = []
+
+    for protocol in PROTOCOL_DISPLAY_ORDER:
+        if protocol in results:
+            ordered_results.append(results[protocol])
+
+    for protocol, value in results.items():
+        if protocol not in PROTOCOL_DISPLAY_ORDER:
+            ordered_results.append(value)
+
+    return ordered_results
+def build_vlm_feature_state_dict(
+    feature_states: Any,
+    metric_judgements: Any,
+) -> Dict[str, Any]:
+    """
+    把 feature_states / metric_judgements 统一转换为 consistency_gate 可用的 dict。
+
+    原因：
+    - consistency_gate.check_visual_clinical_consistency 当前按 dict.items() 读取；
+    - extract_feature_states() 的实际返回可能是 list / dict / 其他结构；
+    - metric_judgements 中包含 status、state_text，更适合做图像-临床一致性门控。
+    """
+    result: Dict[str, Any] = {}
+
+    if isinstance(feature_states, dict):
+        for k, v in feature_states.items():
+            result[str(k)] = v
+
+    elif isinstance(feature_states, list):
+        for idx, item in enumerate(feature_states):
+            if isinstance(item, dict):
+                key = (
+                    item.get("feature")
+                    or item.get("metric")
+                    or item.get("name")
+                    or item.get("指标")
+                    or item.get("key")
+                    or f"feature_state_{idx}"
+                )
+                result[str(key)] = item
+            else:
+                result[f"feature_state_{idx}"] = item
+
+    elif feature_states:
+        result["feature_states"] = feature_states
+
+    for idx, item in enumerate(safe_list(metric_judgements)):
+        item = safe_dict(item)
+        metric = (
+            item.get("metric")
+            or item.get("指标")
+            or item.get("name")
+            or f"metric_{idx}"
+        )
+        status = item.get("status") or item.get("状态") or ""
+        state_text = item.get("state_text") or item.get("解释") or ""
+        value = item.get("value") or item.get("患者数值") or ""
+
+        result[f"metric_{metric}"] = {
+            "metric": metric,
+            "status": status,
+            "state_text": state_text,
+            "value": value,
+            "raw": item,
+        }
+
+    return result
+
+
+def split_image_region_findings_for_llm(
+    image_region_findings: List[Dict[str, Any]]
+) -> Dict[str, List[Dict[str, Any]]]:
+    usable = []
+    uncertain_or_conflict = []
+
+    for item in safe_list(image_region_findings):
+        item = safe_dict(item)
+        if item.get("use_in_report") is True:
+            usable.append(item)
+        else:
+            uncertain_or_conflict.append(item)
+
+    return {
+        "usable": usable,
+        "uncertain_or_conflict": uncertain_or_conflict,
+    }
+
+def show_image_safely(image_path: Any, title: str, width: int = 420):
+    """
+    用 PIL 读取本地图片后再交给 Streamlit 显示。
+    比直接 st.image(path) 更稳，尤其是 Windows 路径、中文路径、长路径场景。
+    """
+    path_str = _clean_path_value(image_path)
+
+    if not path_str:
+        st.caption(f"{title}：路径为空。")
+        return
+
+    path_obj = Path(path_str)
+
+    if not path_obj.exists():
+        st.warning(f"{title} 文件不存在：{path_obj}")
+        return
+
+    try:
+        img = Image.open(path_obj).convert("RGB")
+        st.image(
+            img,
+            caption=f"{title} | {path_obj.name}",
+            width=width,
+        )
+        st.caption(str(path_obj))
+        st.caption(f"图像尺寸：{img.size[0]} × {img.size[1]}")
+    except Exception as e:
+        st.warning(f"{title} 显示失败：{e}")
+        st.caption(str(path_obj))
+def render_image_region_findings_section(
+    image_path_for_vlm: Optional[str],
+    image_region_findings: List[Dict[str, Any]],
+    image_region_error: Optional[str],
+    is_patient_user: bool,
+):
+    st.subheader("🖼️ 图像侧区域引导解释（FR-GCD-Lite）")
+    st.caption(
+        "该模块仅作为图像侧辅助证据，不参与无监督分型，不修改 cluster，不输出临床诊断。"
+    )
+
+    tab_region, tab_region_debug = st.tabs(["区域解释结果", "调试信息"])
+
+    with tab_region:
+        if image_path_for_vlm:
+            st.caption(f"当前使用图像来源：{image_path_for_vlm}")
+        else:
+            st.info("当前患者未找到可用 ARM 图像路径，暂不生成图像侧区域解释。")
+
+        if image_region_error:
+            st.warning(f"图像侧区域解释生成失败：{image_region_error}")
+        elif not image_path_for_vlm:
+            st.info(
+                "当前患者没有解析到可裁剪的 PNG/JPG 图像路径。"
+                "请确认侧边栏中的 ARM 预处理图像文件夹是否正确，"
+                "并确认该目录下存在与 top-k filename 同名的 .png 文件。"
+            )
+
+        if not image_region_findings:
+            st.caption("暂无图像侧区域解释结果。")
+        else:
+            for item in image_region_findings:
+                item = safe_dict(item)
+
+                st.markdown(
+                    f"### {item.get('region_name', item.get('region_id', '未知区域'))}"
+                )
+
+                # ------------------------------------------------------------
+                # 图像可视化：同时显示 source_image_path 和 crop_path
+                # ------------------------------------------------------------
+                source_image_path = item.get("source_image_path")
+                crop_path = item.get("crop_path")
+
+                img_col1, img_col2 = st.columns(2)
+
+                with img_col1:
+                    st.markdown("**原始预处理图像**")
+                    show_image_safely(
+                        image_path=source_image_path,
+                        title="source_image_path",
+                        width=420,
+                    )
+
+                with img_col2:
+                    st.markdown("**FR-GCD-Lite 输入图像**")
+                    show_image_safely(
+                        image_path=crop_path,
+                        title="crop_path",
+                        width=420,
+                    )
+            
+
+                # ------------------------------------------------------------
+                # 图像侧解释结果
+                # ------------------------------------------------------------
+                st.markdown("**图像侧解释结果**")
+
+                visual_support = item.get("visual_support", "-")
+                confidence = item.get("confidence", "-")
+                consistency_status = item.get("consistency_status", "-")
+                use_in_report = item.get("use_in_report", False)
+
+                info_col1, info_col2 = st.columns(2)
+
+                with info_col1:
+                    st.write("**图像形态描述：**", item.get("visual_morphology", "-"))
+                    st.write("**图像侧判断：**", visual_support)
+                    st.write("**发现：**", item.get("finding", "-"))
+                    st.write("**图像证据：**", item.get("evidence", "-"))
+                with info_col2:
+                    st.write("**置信度：**", fmt_number(confidence, 2))
+                    st.write("**一致性状态：**", consistency_status)
+                    st.write("**是否进入 LLM 报告：**", "是" if use_in_report else "否")
+
+                note = item.get("consistency_note")
+                if note:
+                    if use_in_report:
+                        st.success(note)
+                    else:
+                        st.info(note)
+
+                st.divider()
+
+    with tab_region_debug:
+        if is_patient_user:
+            st.caption("患者角色不展示图像侧调试信息。")
+        else:
+            st.write("image_path_for_vlm：", image_path_for_vlm or "-")
+            st.write("image_region_error：", image_region_error or "-")
+            st.json(image_region_findings)
+
+
+# ============================================================
+# Streamlit 页面开始
+# ============================================================
+
 st.set_page_config(page_title="患者视图 | ARM 功能表型系统", layout="wide")
 
 st.title("🧠 患者功能表型视图")
@@ -802,6 +1373,11 @@ patient_id_input = st.sidebar.text_input(
     "患者编号（Patient ID）",
     value="",
     placeholder="请输入真实患者编号，例如：210259070",
+)
+image_root_input = st.sidebar.text_input(
+    "ARM 预处理图像文件夹",
+    value=r"H:\windows\图像数据\dataProcess\preprocessed_features",
+    placeholder=r"例如：H:\windows\图像数据\dataProcess\preprocessed_features",
 )
 
 patient_id = normalize_patient_id(patient_id_input)
@@ -1032,6 +1608,88 @@ if version_patient_result and "raw_row" in version_patient_result:
 else:
     st.caption("当前版本结果文件中暂无患者原始临床指标，无法进行医院参考范围判定。")
 
+# ============================================================
+# VLM / FR-GCD-Lite：图像侧区域引导解释
+# 必须放在 LLM 生成之前，这样结果才能进入 llm_context
+# ============================================================
+
+raw_row_for_vlm = {}
+if version_patient_result and isinstance(version_patient_result.get("raw_row"), dict):
+    raw_row_for_vlm = version_patient_result.get("raw_row", {})
+
+protocol_topk_details_for_vlm = safe_list(representation.get("protocol_topk_details"))
+
+image_paths_for_vlm = resolve_patient_image_paths_by_protocol(
+    patient=patient,
+    raw_row=raw_row_for_vlm,
+    representation=representation,
+    protocol_topk_details=protocol_topk_details_for_vlm,
+    image_root_dir=image_root_input,
+)
+
+if image_paths_for_vlm:
+    image_path_for_vlm = "；".join(
+        [
+            f"{item.get('protocol')}: {item.get('image_path')}"
+            for item in image_paths_for_vlm
+        ]
+    )
+else:
+    image_path_for_vlm = None
+
+image_region_findings: List[Dict[str, Any]] = []
+image_region_error: Optional[str] = None
+
+if image_paths_for_vlm:
+    try:
+        all_region_findings: List[Dict[str, Any]] = []
+
+        for path_item in image_paths_for_vlm:
+            one_image_path = path_item.get("image_path")
+            protocol = path_item.get("protocol")
+
+            if not one_image_path:
+                continue
+
+            one_findings = generate_region_findings(
+                patient_id=str(patient_id),
+                image_path=one_image_path,
+                output_dir=str(ROOT_DIR / "outputs" / "vlm_region_crops"),
+            )
+
+            for finding in safe_list(one_findings):
+                finding = safe_dict(finding)
+                finding["matched_protocol"] = protocol
+                finding["matched_filename"] = path_item.get("filename")
+                finding["matched_rank"] = path_item.get("rank")
+                finding["matched_score"] = path_item.get("score")
+                finding["matched_weight"] = path_item.get("weight")
+                all_region_findings.append(finding)
+
+        vlm_feature_state_dict = build_vlm_feature_state_dict(
+            feature_states=feature_states,
+            metric_judgements=metric_judgements,
+        )
+
+        image_region_findings = check_visual_clinical_consistency(
+            region_findings=all_region_findings,
+            feature_states=vlm_feature_state_dict,
+        )
+
+    except Exception as e:
+        image_region_error = str(e)
+else:
+    image_region_error = None
+
+st.divider()
+
+render_image_region_findings_section(
+    image_path_for_vlm=image_path_for_vlm,
+    image_region_findings=image_region_findings,
+    image_region_error=image_region_error,
+    is_patient_user=is_patient_user,
+)
+
 st.divider()
 
 # -----------------------------
@@ -1065,7 +1723,7 @@ with col_a:
         with st.expander("查看 top-k 关键帧解释"):
             df_topk = pd.DataFrame(protocol_topk_details)
             show_cols = [
-                c for c in ["protocol", "rank", "filename", "score", "weight"]
+                c for c in ["protocol", "rank", "filename", "score", "weight", "image_path", "frame_path"]
                 if c in df_topk.columns
             ]
             if not df_topk.empty and show_cols:
@@ -1262,6 +1920,21 @@ llm_context = build_llm_context(
     rag=rag,
     kg_paths=kg_paths_for_llm,
 )
+
+if not isinstance(llm_context, dict):
+    llm_context = {}
+
+image_region_split = split_image_region_findings_for_llm(image_region_findings)
+
+llm_context["image_region_findings"] = image_region_split["usable"]
+llm_context["image_region_uncertain_findings"] = image_region_split["uncertain_or_conflict"]
+llm_context["image_region_usage_rules"] = [
+    "图像侧区域解释仅作为辅助证据，不参与无监督分型。",
+    "不得根据图像侧区域解释重新判断患者 cluster。",
+    "不得根据图像侧区域解释输出临床诊断或治疗建议。",
+    "consistency_status 为 conflict、uncertain 或 weak_visual_evidence 的结果只能进入不确定性说明。",
+    "最终解释应以无监督分型、医院参考范围判定、RAIR / Rome IV proxy、KG 路径和 RAG 文献证据为主。",
+]
 
 generated_report = generate_llm_report(llm_context)
 
