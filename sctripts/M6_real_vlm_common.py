@@ -1,0 +1,219 @@
+﻿from pathlib import Path
+import os
+import re
+import json
+import base64
+
+import numpy as np
+from PIL import Image
+from dotenv import load_dotenv
+from openai import OpenAI
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+load_dotenv(ROOT / ".env.xiaomi", override=True, encoding="utf-8-sig")
+load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
+
+
+def get_client():
+    api_key = os.getenv("XIAOMI_API_KEY", "").strip()
+    base_url = os.getenv("XIAOMI_BASE_URL", "").strip()
+
+    if not api_key:
+        raise RuntimeError("未找到 XIAOMI_API_KEY，请检查 .env.xiaomi")
+    if not base_url:
+        raise RuntimeError("未找到 XIAOMI_BASE_URL，请检查 .env.xiaomi")
+
+    return OpenAI(api_key=api_key, base_url=base_url)
+
+
+def get_model():
+    model = os.getenv("XIAOMI_VLM_MODEL", "").strip()
+    if not model:
+        raise RuntimeError("未找到 XIAOMI_VLM_MODEL，请检查 .env.xiaomi")
+    return model
+
+
+def npy_to_rgb_image(npy_path):
+    npy_path = Path(npy_path)
+    arr = np.load(npy_path)
+
+    if arr.ndim == 3 and arr.shape[0] in [1, 3, 4]:
+        arr = np.transpose(arr, (1, 2, 0))
+
+    if arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = np.repeat(arr, 3, axis=-1)
+
+    if arr.ndim == 3 and arr.shape[-1] > 3:
+        arr = arr[..., :3]
+
+    arr = arr.astype(np.float32)
+    finite = np.isfinite(arr)
+
+    if not finite.any():
+        raise RuntimeError(f"npy 全是 NaN/Inf，不能转图: {npy_path}")
+
+    lo, hi = np.percentile(arr[finite], [1, 99])
+    if hi <= lo:
+        lo, hi = float(np.nanmin(arr)), float(np.nanmax(arr))
+
+    arr = (arr - lo) / max(hi - lo, 1e-6) * 255.0
+    arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+    return Image.fromarray(arr).convert("RGB")
+
+
+def image_to_data_url(img):
+    import io
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return "data:image/jpeg;base64," + b64
+
+
+def npy_to_data_url(npy_path):
+    img = npy_to_rgb_image(npy_path)
+    return image_to_data_url(img)
+
+
+def extract_json(text):
+    if text is None:
+        raise ValueError("模型返回 content 为空")
+
+    text = text.strip()
+
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"```$", "", text).strip()
+
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    m = re.search(r"\{.*\}", text, flags=re.S)
+    if not m:
+        raise ValueError(f"没有找到 JSON: {text[:300]}")
+
+    return json.loads(m.group(0))
+
+
+def normalize_result(obj):
+    score = obj.get("vlm_score_raw", 1)
+    try:
+        score = int(score)
+    except Exception:
+        score = 1
+    score = max(1, min(4, score))
+
+    quality = str(obj.get("vlm_image_quality", "poor")).strip().lower()
+    if quality not in ["poor", "fair", "good", "excellent"]:
+        quality = "poor"
+
+    uncertain = obj.get("vlm_uncertain", True)
+    if isinstance(uncertain, str):
+        uncertain = uncertain.strip().lower() in ["true", "1", "yes", "是", "不确定"]
+
+    out = {
+        "vlm_score_raw": score,
+        "vlm_image_quality": quality,
+        "vlm_pattern_label": str(obj.get("vlm_pattern_label", "")).strip()[:80],
+        "vlm_reason": str(obj.get("vlm_reason", "")).strip()[:200],
+        "vlm_uncertain": bool(uncertain),
+    }
+
+    return out
+
+
+def build_prompt(protocol):
+    protocol = str(protocol)
+
+    return f"""
+你是一名肛肠测压图像质控助手。你正在查看一张由肛肠测压数据转换得到的伪彩色压力热图。
+
+当前检查协议：{protocol}
+
+注意：
+- 这不是自然照片；
+- 这是彩色热图；
+- 如果看到红、黄、绿、蓝等颜色块、条带、压力分布或曲线结构，不要说它是黑图；
+- 只有在整张图完全黑色、空白、无法看到任何有效结构时，才判断为 poor；
+- 你只做图像质量和模式清晰度粗评分，不做疾病诊断。
+你已经收到一张图像。该图像是由 .npy 压力矩阵转换得到的伪彩色热图，不是自然照片。
+只要图中存在红、黄、绿、蓝等伪彩色块、条带或梯度，就必须视为“已看到图像”，不能回答“未提供图像”“无法看到图像”。
+只有当整张图确实全黑、全白、空白或严重损坏时，才允许判为 poor。
+请只输出 JSON，不要输出解释，不要 Markdown。
+
+JSON 格式必须为：
+{{
+  "vlm_score_raw": 1,
+  "vlm_image_quality": "poor",
+  "vlm_pattern_label": "一句中文标签",
+  "vlm_reason": "一句中文理由",
+  "vlm_uncertain": true
+}}
+
+评分标准：
+1 = 图像质量差，模式不可判断；
+2 = 图像质量一般，能看到部分协议相关模式；
+3 = 图像质量较好，协议相关模式较清楚；
+4 = 图像质量很好，协议相关模式清晰、连续、对比明显。
+
+vlm_image_quality 只能取 poor、fair、good、excellent。
+""".strip()
+
+
+def call_xiaomi_vlm(image_path, protocol):
+    client = get_client()
+    model = get_model()
+
+    data_url = npy_to_data_url(image_path)
+    prompt = build_prompt(protocol)
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": data_url,
+                        },
+                    },
+                ],
+            }
+        ],
+        temperature=0,
+        max_tokens=2000,
+    )
+
+    msg = resp.choices[0].message
+    content = msg.content or ""
+    finish_reason = resp.choices[0].finish_reason
+    reasoning_content = getattr(msg, "reasoning_content", "") or ""
+
+    try:
+        obj = extract_json(content)
+    except Exception as e:
+        raise ValueError(
+            "??? content ???? JSON?"
+            f"finish_reason={finish_reason}; "
+            f"content_repr={repr(content[:500])}; "
+            f"reasoning_head={repr(reasoning_content[:500])}"
+        ) from e
+
+    out = normalize_result(obj)
+    out["vlm_mode"] = "real_xiaomi"
+    out["finish_reason"] = finish_reason
+    return out

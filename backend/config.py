@@ -1,0 +1,23 @@
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+OUTPUT_ROOT = PROJECT_ROOT / "outputs"
+CACHE_DIR = OUTPUT_ROOT / "cache"
+BASELINE_DIR = OUTPUT_ROOT / "baseline"
+ATTN_DIR = OUTPUT_ROOT / "attn"
+CLINICAL_DIR = OUTPUT_ROOT / "clinical"
+RAIR_DIR = OUTPUT_ROOT / "rair"
+CONSENSUS_DIR = OUTPUT_ROOT / "consensus"
+
+DEFAULT_TOPK = 8
+DEFAULT_SEEDS = list(range(10))
+DEFAULT_N_CLUSTERS = 3
+BOUNDARY_THRESHOLD = 0.8
+
+RAG_TOPK = 5
+LLM_ENABLED = False
+RAG_ENABLED = False
+
+DEFAULT_PATIENT_ID = "P0001"
+DEFAULT_CLUSTER_ID = 0

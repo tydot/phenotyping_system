@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Databases
+*.db
+app_data.db
+data/users.db
+
+# Data
+data/raw/
+data/processed/
+data/results/
+
+# Outputs
+outputs/
+
+# Neo4j runtime data
+neo4j_data/
+neo4j_logs/
+neo4j_import/
+neo4j_plugins/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Streamlit / local cache
+.streamlit/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*

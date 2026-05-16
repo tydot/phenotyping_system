@@ -1,0 +1,1468 @@
+"""
+患者视图（Patient View）
+ARM 功能表型系统
+
+说明：
+1. 支持 M1-M5 侧边栏版本切换。
+2. 分型结果来自当前版本 consensus_labels。
+3. 临床指标来自当前版本 clinical_with_clusters / merged_clinical_all。
+4. raw_row = 临床合并行 + 当前版本分型行。
+5. LLM 解释层只解释结构化结果，不参与分型。
+"""
+
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+import streamlit.components.v1 as components
+import tempfile
+import os
+from dotenv import load_dotenv, dotenv_values
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+# 必须在导入 llm_client 之前读取 .env
+ENV_PATH = ROOT_DIR / ".env"
+load_dotenv(ENV_PATH, override=True)
+
+env_values = dotenv_values(ENV_PATH)
+for key in [
+    "LLM_ENABLE_REAL_API",
+    "LLM_PROVIDER",
+    "XIAOMI_API_KEY",
+    "XIAOMI_BASE_URL",
+    "XIAOMI_MODEL",
+    "MIMO_API_KEY",
+    "MIMO_BASE_URL",
+    "MIMO_MODEL",
+]:
+    value = env_values.get(key)
+    if value is not None:
+        os.environ[key] = str(value).strip()
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+from backend.api.patient import get_patient_view
+from backend.auth.auth_service import require_login, can_view_patient
+from backend.version_manager import (
+    select_version_sidebar,
+    safe_read_csv,
+    resolve_path,
+)
+from backend.report.feature_state_extractor import (
+    extract_metric_judgements,
+    extract_feature_states,
+    debug_metric_mapping,
+)
+from backend.report.llm_report import build_llm_context
+from backend.report.llm_client import generate_llm_report, get_llm_runtime_status
+
+# -----------------------------
+# Knowledge Graph / Pyvis imports
+# 允许部署环境缺少 neo4j 或 pyvis 依赖时，患者页主体仍能运行
+# -----------------------------
+GRAPH_FEATURE_AVAILABLE = True
+GRAPH_IMPORT_ERROR = None
+Network = None
+
+try:
+    from pyvis.network import Network
+    from backend.graph.upsert_patient_graph import upsert_patient_knowledge_graph
+    from backend.graph.patient_graph_pipeline import get_patient_graph_for_frontend
+except Exception as e:
+    GRAPH_FEATURE_AVAILABLE = False
+    GRAPH_IMPORT_ERROR = str(e)
+
+
+@st.cache_data(show_spinner=False)
+def load_patient_view(patient_id: str):
+    return get_patient_view(patient_id)
+
+
+@st.cache_data(show_spinner=False)
+def load_patient_graph(patient_id: str):
+    if not GRAPH_FEATURE_AVAILABLE:
+        return {"nodes": [], "edges": [], "paths": []}
+    return get_patient_graph_for_frontend(patient_id)
+
+
+@st.cache_data(show_spinner=False)
+def load_version_csv(file_path_str: str):
+    path = resolve_path(file_path_str)
+    return safe_read_csv(path)
+
+
+def clear_patient_cache():
+    load_patient_view.clear()
+    load_patient_graph.clear()
+    load_version_csv.clear()
+
+
+def safe_dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def safe_list(value: Any) -> List[Any]:
+    return value if isinstance(value, list) else []
+
+
+def fmt_number(x, digits: int = 2):
+    if x is None or x == "":
+        return "-"
+    if isinstance(x, bool):
+        return "是" if x else "否"
+    try:
+        return f"{float(x):.{digits}f}"
+    except Exception:
+        return str(x)
+
+
+def dict_to_df(data: dict, col1: str = "指标", col2: str = "数值") -> pd.DataFrame:
+    if not isinstance(data, dict) or not data:
+        return pd.DataFrame(columns=[col1, col2])
+    return pd.DataFrame(list(data.items()), columns=[col1, col2])
+
+
+def show_metric_table(data: Dict[str, Any], digits: int = 2, empty_text: str = "暂无数据。"):
+    df = dict_to_df(data)
+    if df.empty:
+        st.caption(empty_text)
+        return
+    df["数值"] = df["数值"].apply(lambda x: fmt_number(x, digits))
+    st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+def normalize_patient_id(raw_value: str) -> str:
+    return (raw_value or "").strip()
+
+
+def normalize_id_for_match(value: Any) -> str:
+    """
+    统一 patient_id 格式。
+    解决 CSV 里 210259070 被 pandas 读成 210259070.0 后无法匹配的问题。
+    """
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+
+    s = str(value).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
+
+def find_first_existing_col(df: pd.DataFrame, candidates):
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def normalize_bool_value(x):
+    if isinstance(x, bool):
+        return x
+    s = str(x).strip().lower()
+    return s in ["true", "1", "yes", "y", "是", "边界", "boundary"]
+
+
+def get_patient_version_row(
+    patient_id: str,
+    current_files: dict,
+    boundary_threshold: float,
+    current_version: Optional[dict] = None,
+):
+    """
+    从当前选中版本中查找患者分型结果，并补充当前版本的 merged_clinical_all.csv 临床指标。
+
+    支持 M1-M5 版本切换，并输出 clinical_debug 方便排查为什么临床文件没读到。
+    """
+    current_version = current_version or {}
+    current_files = current_files or {}
+    target_pid = normalize_id_for_match(patient_id)
+
+    def find_patient_row(file_path: Optional[str]):
+        if not file_path:
+            return None, None, None
+
+        df = load_version_csv(file_path)
+        if df is None or df.empty:
+            return None, None, None
+
+        patient_col = find_first_existing_col(
+            df,
+            [
+                "patient_id",
+                "patient",
+                "PatientID",
+                "Patient_ID",
+                "id",
+                "病例号",
+                "患者编号",
+                "pid_key",
+            ],
+        )
+
+        if not patient_col:
+            return None, df, None
+
+        df = df.copy()
+        df["__pid_match__"] = df[patient_col].apply(normalize_id_for_match)
+        row_df = df[df["__pid_match__"] == target_pid]
+
+        if row_df.empty:
+            return None, df, patient_col
+
+        row = row_df.iloc[0].drop(labels=["__pid_match__"], errors="ignore").to_dict()
+        return row, df.drop(columns=["__pid_match__"], errors="ignore"), patient_col
+
+    def get_cluster_info(row: dict, df: pd.DataFrame):
+        cluster_col = find_first_existing_col(
+            df,
+            [
+                "consensus_cluster",
+                "cluster",
+                "Cluster",
+                "final_cluster",
+                "label",
+                "consensus_label",
+                "共识簇",
+                "AI分型",
+            ],
+        )
+
+        confidence_col = find_first_existing_col(
+            df,
+            [
+                "confidence",
+                "Confidence",
+                "consensus_confidence",
+                "vote_confidence",
+                "stability_confidence",
+                "置信度",
+                "稳定性置信度",
+            ],
+        )
+
+        boundary_col = find_first_existing_col(
+            df,
+            [
+                "is_boundary",
+                "boundary",
+                "Is_Boundary",
+                "边界患者",
+                "是否边界",
+            ],
+        )
+
+        cluster_val = row.get(cluster_col) if cluster_col else None
+
+        confidence_val = None
+        if confidence_col:
+            try:
+                confidence_val = float(row.get(confidence_col))
+            except Exception:
+                confidence_val = None
+
+        if boundary_col:
+            is_boundary_val = normalize_bool_value(row.get(boundary_col))
+        else:
+            is_boundary_val = (
+                confidence_val is not None and confidence_val < boundary_threshold
+            )
+
+        return cluster_val, confidence_val, is_boundary_val
+
+    def infer_merged_path_from_consensus(consensus_path: Optional[str]):
+        if not consensus_path:
+            return None
+
+        p = str(consensus_path)
+        if "consensus_labels_all.csv" in p:
+            return p.replace("consensus_labels_all.csv", "merged_clinical_all.csv")
+        if "consensus_labels.csv" in p:
+            return p.replace("consensus_labels.csv", "merged_clinical_all.csv")
+        return None
+
+    short_name = current_version.get("short_name", "")
+    consensus_file = current_files.get("consensus_labels")
+    clinical_file = current_files.get("clinical_with_clusters")
+    merged_file = current_files.get("merged_clinical_all")
+    inferred_merged_file = infer_merged_path_from_consensus(consensus_file)
+
+    clinical_candidate_files = [
+        clinical_file,
+        merged_file,
+        inferred_merged_file,
+    ]
+
+    if short_name:
+        clinical_candidate_files.append(
+            f"H:/windows/图像数据/dataProcess/processed/{short_name}/merged_clinical_all.csv"
+        )
+
+    label_candidate_files = [
+        consensus_file,
+        clinical_file,
+        merged_file,
+        inferred_merged_file,
+    ]
+
+    # ------------------------------------------------------------
+    # 1. 读取当前版本分型结果
+    # ------------------------------------------------------------
+    label_row = None
+    label_df = None
+    label_source_file = None
+
+    for file_path in label_candidate_files:
+        row, df, _ = find_patient_row(file_path)
+        if row is None or df is None:
+            continue
+
+        cluster_col = find_first_existing_col(
+            df,
+            [
+                "consensus_cluster",
+                "cluster",
+                "Cluster",
+                "final_cluster",
+                "label",
+                "consensus_label",
+                "共识簇",
+                "AI分型",
+            ],
+        )
+
+        confidence_col = find_first_existing_col(
+            df,
+            [
+                "confidence",
+                "Confidence",
+                "consensus_confidence",
+                "vote_confidence",
+                "stability_confidence",
+                "置信度",
+                "稳定性置信度",
+            ],
+        )
+
+        if cluster_col or confidence_col:
+            label_row = row
+            label_df = df
+            label_source_file = file_path
+            break
+
+    if label_row is None or label_df is None:
+        return None
+
+    cluster_val, confidence_val, is_boundary_val = get_cluster_info(label_row, label_df)
+
+    # ------------------------------------------------------------
+    # 2. 读取当前版本临床合并文件
+    # ------------------------------------------------------------
+    clinical_row = None
+    clinical_source_file = None
+    clinical_debug = []
+
+    for file_path in clinical_candidate_files:
+        if not file_path:
+            clinical_debug.append(
+                {
+                    "候选文件": "-",
+                    "状态": "空路径",
+                    "字段数": "-",
+                    "患者列": "-",
+                    "是否找到患者": False,
+                }
+            )
+            continue
+
+        df = load_version_csv(file_path)
+
+        if df is None:
+            clinical_debug.append(
+                {
+                    "候选文件": file_path,
+                    "状态": "读取失败或文件不存在",
+                    "字段数": "-",
+                    "患者列": "-",
+                    "是否找到患者": False,
+                }
+            )
+            continue
+
+        if df.empty:
+            clinical_debug.append(
+                {
+                    "候选文件": file_path,
+                    "状态": "文件为空",
+                    "字段数": 0,
+                    "患者列": "-",
+                    "是否找到患者": False,
+                }
+            )
+            continue
+
+        patient_col = find_first_existing_col(
+            df,
+            [
+                "patient_id",
+                "patient",
+                "PatientID",
+                "Patient_ID",
+                "id",
+                "病例号",
+                "患者编号",
+                "pid_key",
+            ],
+        )
+
+        if not patient_col:
+            clinical_debug.append(
+                {
+                    "候选文件": file_path,
+                    "状态": "未找到患者ID列",
+                    "字段数": len(df.columns),
+                    "患者列": "-",
+                    "是否找到患者": False,
+                }
+            )
+            continue
+
+        df2 = df.copy()
+        df2["__pid_match__"] = df2[patient_col].apply(normalize_id_for_match)
+        row_df = df2[df2["__pid_match__"] == target_pid]
+        found_patient = not row_df.empty
+
+        clinical_debug.append(
+            {
+                "候选文件": file_path,
+                "状态": "已读取",
+                "字段数": len(df.columns),
+                "患者列": patient_col,
+                "是否找到患者": found_patient,
+            }
+        )
+
+        if row_df.empty:
+            continue
+
+        row = row_df.iloc[0].drop(labels=["__pid_match__"], errors="ignore").to_dict()
+
+        if file_path == label_source_file and len(row.keys()) <= 20:
+            continue
+
+        clinical_row = row
+        clinical_source_file = file_path
+        break
+
+    # ------------------------------------------------------------
+    # 3. 合并 raw_row
+    # ------------------------------------------------------------
+    if clinical_row:
+        raw_row = dict(clinical_row)
+        raw_row.update(label_row)
+    else:
+        raw_row = dict(label_row)
+
+    raw_row["consensus_cluster"] = cluster_val
+    raw_row["confidence"] = confidence_val
+    raw_row["is_boundary"] = is_boundary_val
+    raw_row["switch_rate"] = 1 - confidence_val if confidence_val is not None else None
+
+    return {
+        "raw_row": raw_row,
+        "source_file": label_source_file,
+        "clinical_source_file": clinical_source_file,
+        "clinical_debug": clinical_debug,
+        "cluster": cluster_val,
+        "confidence": confidence_val,
+        "is_boundary": is_boundary_val,
+        "switch_rate": 1 - confidence_val if confidence_val is not None else None,
+    }
+
+
+def sync_patient_graph(patient_id: str, patient: Dict[str, Any]) -> str | None:
+    """
+    将当前患者数据写入 Neo4j，并清理图谱缓存。
+    成功返回 None，失败返回错误信息。
+    """
+    if not GRAPH_FEATURE_AVAILABLE:
+        return f"知识图谱模块不可用：{GRAPH_IMPORT_ERROR}"
+
+    try:
+        upsert_patient_knowledge_graph(patient, patient_id=patient_id)
+        load_patient_graph.clear()
+        return None
+    except Exception as e:
+        return str(e)
+
+
+def short_text(text: Any, max_len: int = 14) -> str:
+    text = "" if text is None else str(text)
+    return text if len(text) <= max_len else text[:max_len] + "..."
+
+
+def build_node_title(label: str, node_type: str, props: Dict[str, Any]) -> str:
+    lines = [f"<b>{label}</b>", f"type: {node_type}"]
+    for k, v in props.items():
+        lines.append(f"{k}: {v}")
+    return "<br>".join(lines)
+
+
+def build_edge_title(relation: str, props: Dict[str, Any]) -> str:
+    lines = [f"<b>{relation}</b>"]
+    for k, v in props.items():
+        lines.append(f"{k}: {v}")
+    return "<br>".join(lines)
+
+
+def select_graph_subset(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]]):
+    typed_nodes: Dict[str, List[Dict[str, Any]]] = {}
+    for node in safe_list(nodes):
+        node = safe_dict(node)
+        ntype = str(node.get("type", "Unknown"))
+        typed_nodes.setdefault(ntype, []).append(node)
+
+    selected: List[Dict[str, Any]] = []
+    keep_all_types = {"Patient", "Phenotype", "Mechanism", "Recommendation", "Cluster"}
+
+    for ntype, items in typed_nodes.items():
+        if ntype in keep_all_types:
+            selected.extend(items)
+        elif ntype == "Feature":
+            selected.extend(items[:8])
+        elif ntype == "Evidence":
+            selected.extend(items[:4])
+        else:
+            selected.extend(items[:6])
+
+    keep_ids = {safe_dict(n).get("id") for n in selected if safe_dict(n).get("id")}
+
+    filtered_edges: List[Dict[str, Any]] = []
+    for edge in safe_list(edges):
+        edge = safe_dict(edge)
+        source = edge.get("source")
+        target = edge.get("target")
+        if source in keep_ids and target in keep_ids:
+            filtered_edges.append(edge)
+
+    connected_ids = set()
+    for edge in filtered_edges:
+        connected_ids.add(edge.get("source"))
+        connected_ids.add(edge.get("target"))
+
+    filtered_nodes = [
+        n for n in selected
+        if safe_dict(n).get("id") in connected_ids
+        or safe_dict(n).get("type") == "Patient"
+    ]
+
+    return filtered_nodes, filtered_edges
+
+
+def render_knowledge_graph_pyvis(nodes, edges, height: int = 760):
+    if not GRAPH_FEATURE_AVAILABLE or Network is None:
+        st.info("当前环境未安装 pyvis / Neo4j 相关依赖，知识图谱可视化暂不可用。")
+        if GRAPH_IMPORT_ERROR:
+            st.caption(f"导入信息：{GRAPH_IMPORT_ERROR}")
+        return
+
+    display_nodes, display_edges = select_graph_subset(
+        safe_list(nodes),
+        safe_list(edges),
+    )
+
+    net = Network(
+        height=f"{height}px",
+        width="100%",
+        bgcolor="#1f2430",
+        font_color="white",
+        directed=True,
+    )
+
+    type_style = {
+        "Patient": {"color": "#c678dd", "size": 38},
+        "Phenotype": {"color": "#56b6c2", "size": 30},
+        "Feature": {"color": "#f4a261", "size": 22},
+        "Mechanism": {"color": "#98c379", "size": 28},
+        "Evidence": {"color": "#e06c75", "size": 20},
+        "Recommendation": {"color": "#e5c07b", "size": 24},
+        "Cluster": {"color": "#61afef", "size": 24},
+    }
+
+    for node in display_nodes:
+        node = safe_dict(node)
+        node_id = node.get("id")
+        if not node_id:
+            continue
+
+        label = str(node.get("label", ""))
+        node_type = str(node.get("type", "Unknown"))
+        props = safe_dict(node.get("properties"))
+        style = type_style.get(node_type, {"color": "#7f848e", "size": 18})
+
+        if node_type == "Patient":
+            show_label = short_text(label, 18)
+        elif node_type in {"Phenotype", "Mechanism", "Recommendation", "Cluster"}:
+            show_label = short_text(label, 16)
+        else:
+            show_label = short_text(label, 10)
+
+        net.add_node(
+            node_id,
+            label=show_label,
+            title=build_node_title(label, node_type, props),
+            color=style["color"],
+            size=style["size"],
+        )
+
+    for edge in display_edges:
+        edge = safe_dict(edge)
+        source = edge.get("source")
+        target = edge.get("target")
+        relation = str(edge.get("relation", ""))
+        props = safe_dict(edge.get("properties"))
+
+        if not source or not target:
+            continue
+
+        show_relation_label = relation not in {"HAS_FEATURE", "HAS_EVIDENCE"}
+
+        net.add_edge(
+            source,
+            target,
+            label=relation if show_relation_label else "",
+            title=build_edge_title(relation, props),
+            arrows="to",
+        )
+
+    net.set_options("""
+    const options = {
+      "nodes": {
+        "shape": "dot",
+        "borderWidth": 2,
+        "borderWidthSelected": 3,
+        "font": {
+          "size": 18,
+          "color": "white",
+          "face": "arial"
+        }
+      },
+      "edges": {
+        "arrows": {
+          "to": {
+            "enabled": true,
+            "scaleFactor": 0.7
+          }
+        },
+        "color": {
+          "color": "#cfd6e4",
+          "highlight": "#ffffff",
+          "inherit": false
+        },
+        "font": {
+          "size": 12,
+          "color": "white",
+          "strokeWidth": 0,
+          "align": "middle"
+        },
+        "smooth": {
+          "enabled": true,
+          "type": "dynamic"
+        },
+        "width": 1.5
+      },
+      "physics": {
+        "enabled": true,
+        "barnesHut": {
+          "gravitationalConstant": -3800,
+          "centralGravity": 0.28,
+          "springLength": 155,
+          "springConstant": 0.035,
+          "damping": 0.92,
+          "avoidOverlap": 0.2
+        },
+        "minVelocity": 0.75
+      },
+      "interaction": {
+        "hover": true,
+        "navigationButtons": true,
+        "keyboard": true,
+        "tooltipDelay": 120
+      }
+    }
+    """)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:
+        net.save_graph(f.name)
+        html_path = f.name
+
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    components.html(html, height=height + 20, scrolling=False)
+
+    try:
+        os.remove(html_path)
+    except Exception:
+        pass
+
+
+def normalize_gender_value(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    s = str(value).strip()
+    if not s:
+        return None
+
+    mapping = {
+        "男": "male",
+        "male": "male",
+        "Male": "male",
+        "M": "male",
+        "m": "male",
+        "1": "male",
+        "女": "female",
+        "female": "female",
+        "Female": "female",
+        "F": "female",
+        "f": "female",
+        "0": "female",
+        "2": "female",
+    }
+
+    return mapping.get(s, s)
+
+
+def resolve_gender_display(patient: Dict[str, Any], gender_meta: Dict[str, Any]) -> Dict[str, Any]:
+    patient = safe_dict(patient)
+    gender_meta = safe_dict(gender_meta)
+
+    patient_gender = normalize_gender_value(patient.get("gender"))
+    patient_sex = normalize_gender_value(patient.get("sex"))
+    actual_gender = patient_gender or patient_sex
+
+    meta_gender = normalize_gender_value(gender_meta.get("resolved_gender"))
+    meta_source = gender_meta.get("source", "-")
+    meta_defaulted = bool(gender_meta.get("is_defaulted", False))
+
+    if actual_gender:
+        source = meta_source
+        if source in (None, "", "-", "default"):
+            source = "clinical"
+        return {
+            "resolved_gender": actual_gender,
+            "source": source,
+            "is_defaulted": False,
+        }
+
+    if meta_gender:
+        return {
+            "resolved_gender": meta_gender,
+            "source": meta_source or "-",
+            "is_defaulted": meta_defaulted,
+        }
+
+    return {
+        "resolved_gender": "-",
+        "source": "-",
+        "is_defaulted": True,
+    }
+
+
+st.set_page_config(page_title="患者视图 | ARM 功能表型系统", layout="wide")
+
+st.title("🧠 患者功能表型视图")
+st.caption("基于人工智能的功能亚型分配与生理证据展示，仅用于科研与表型探索")
+st.divider()
+
+selected_version, current_version, current_files = select_version_sidebar(
+    key="patient_selected_version"
+)
+
+st.info(
+    f"当前患者页版本：**{current_version.get('display_name', selected_version)}**  \n"
+    f"方法配置：**{current_version.get('method', '-')}**"
+)
+
+# -----------------------------
+# Sidebar
+# -----------------------------
+st.sidebar.header("患者选择")
+patient_id_input = st.sidebar.text_input(
+    "患者编号（Patient ID）",
+    value="",
+    placeholder="请输入真实患者编号，例如：210259070",
+)
+
+patient_id = normalize_patient_id(patient_id_input)
+
+cbtn1, cbtn2 = st.sidebar.columns(2)
+with cbtn1:
+    load_btn = st.button("加载患者", use_container_width=True)
+with cbtn2:
+    refresh_btn = st.button("刷新缓存", use_container_width=True)
+
+if refresh_btn:
+    clear_patient_cache()
+    st.sidebar.success("缓存已刷新。")
+
+if not load_btn and not patient_id:
+    st.info("请输入患者编号并点击“加载患者”。")
+    st.stop()
+
+if not patient_id:
+    st.warning("患者编号不能为空。")
+    st.stop()
+
+# -----------------------------
+# Auth / Permission
+# -----------------------------
+user = require_login()
+role = user.get("role")
+is_patient_user = role == "patient"
+
+if not can_view_patient(user, patient_id):
+    st.error("您无权限查看该患者。")
+    st.stop()
+
+# -----------------------------
+# Load data
+# -----------------------------
+patient = load_patient_view(patient_id)
+if not patient:
+    st.error("未找到该患者，或后端尚未返回有效数据。")
+    st.stop()
+
+ai = safe_dict(patient.get("ai_result"))
+phys = safe_dict(patient.get("physiology"))
+representation = safe_dict(patient.get("representation"))
+rair = safe_dict(patient.get("rair"))
+stab = safe_dict(patient.get("stability"))
+rome = safe_dict(patient.get("rome_iv"))
+group_stats = safe_dict(patient.get("group_statistics"))
+llm_analysis = safe_dict(patient.get("llm_analysis"))
+rag = safe_dict(patient.get("rag"))
+rag_recommendations = safe_list(patient.get("rag_recommendations"))
+gender_meta = safe_dict(patient.get("gender_meta"))
+
+# ============================================================
+# 当前 M1-M5 版本结果覆盖
+# ============================================================
+
+boundary_threshold = current_version.get("boundary_threshold", 0.8)
+try:
+    boundary_threshold = float(boundary_threshold)
+except Exception:
+    boundary_threshold = 0.8
+
+version_patient_result = get_patient_version_row(
+    patient_id=patient_id,
+    current_files=current_files,
+    boundary_threshold=boundary_threshold,
+    current_version=current_version,
+)
+
+if version_patient_result:
+    ai["cluster"] = version_patient_result.get("cluster")
+    ai["confidence"] = version_patient_result.get("confidence")
+    ai["is_boundary"] = version_patient_result.get("is_boundary")
+
+    stab["confidence"] = version_patient_result.get("confidence")
+    stab["switch_rate"] = version_patient_result.get("switch_rate")
+    stab["is_boundary"] = version_patient_result.get("is_boundary")
+    stab["label"] = "边界患者" if version_patient_result.get("is_boundary") else "稳定患者"
+
+    group_stats["version"] = current_version.get("display_name", selected_version)
+
+    with st.expander("调试：查看当前版本患者分型来源"):
+        st.write("当前版本：", current_version.get("display_name", selected_version))
+        st.write("来源文件：", version_patient_result.get("source_file"))
+        st.write("临床合并文件：", version_patient_result.get("clinical_source_file", "-"))
+        st.write("Cluster：", version_patient_result.get("cluster"))
+        st.write("Confidence：", version_patient_result.get("confidence"))
+        st.write("是否边界：", version_patient_result.get("is_boundary"))
+
+        raw_row = version_patient_result.get("raw_row", {})
+        st.write("raw_row 字段数量：", len(raw_row))
+        st.write("raw_row 字段列表：", list(raw_row.keys()))
+
+        clinical_debug = version_patient_result.get("clinical_debug", [])
+        if clinical_debug:
+            st.markdown("**临床文件读取诊断**")
+            clinical_debug_df = pd.DataFrame(clinical_debug).astype(str)
+
+            st.dataframe(
+                clinical_debug_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        show_raw_row = st.checkbox(
+            "显示 raw_row 原始内容",
+            value=False,
+            key=f"show_raw_row_{patient_id}_{selected_version}",
+        )
+        if show_raw_row:
+            st.json(raw_row)
+
+else:
+    st.warning(
+        "当前版本结果文件中未找到该患者，将使用后端默认患者结果展示。"
+    )
+
+# -----------------------------
+# AI phenotype assignment
+# -----------------------------
+st.subheader("AI 表型分配结果（Phenotype Assignment）")
+col1, col2, col3 = st.columns(3)
+
+cluster_val = ai.get("cluster")
+confidence_val = ai.get("confidence")
+is_boundary = bool(ai.get("is_boundary", False))
+
+with col1:
+    st.metric("AI 分型（Cluster）", f"Cluster {cluster_val}" if cluster_val is not None else "未知")
+with col2:
+    st.metric("稳定性置信度（Confidence）", fmt_number(confidence_val, 2))
+with col3:
+    st.metric("分型稳定性（Stability）", "⚠️ 边界患者" if is_boundary else "稳定分配")
+
+if is_boundary:
+    st.warning("该患者位于表型分界区域，其分型结果在不同随机初始化下可能存在变化。")
+else:
+    st.caption("该患者的表型分配在多随机种子下保持稳定。")
+
+st.caption("稳定性置信度反映多随机种子无监督聚类结果的一致性，并不等同于临床诊断置信度。")
+
+effective_gender_info = resolve_gender_display(patient, gender_meta)
+resolved_gender = effective_gender_info.get("resolved_gender", "-")
+gender_source = effective_gender_info.get("source", "-")
+gender_is_defaulted = bool(effective_gender_info.get("is_defaulted", False))
+
+if resolved_gender != "-":
+    if gender_is_defaulted:
+        st.warning(f"当前性别参考值为 {resolved_gender}，来源：{gender_source}。数据库未提供 gender，当前使用默认值。")
+    else:
+        st.caption(f"性别参考值：{resolved_gender}（来源：{gender_source}）")
+else:
+    st.warning("当前未获取到患者性别信息，系统将无法可靠匹配性别参考值。")
+
+st.divider()
+
+# -----------------------------
+# Physiology evidence
+# -----------------------------
+st.subheader("生理证据（ARM 功能指标）")
+core_metrics = safe_dict(phys.get("core_metrics"))
+desc_metrics = safe_dict(phys.get("descriptive_metrics"))
+
+col_left, col_right = st.columns(2)
+
+with col_left:
+    st.markdown("**核心功能指标（Definition Axes）**")
+    show_metric_table(core_metrics, digits=2, empty_text="暂无核心 ARM 功能指标。")
+
+with col_right:
+    st.markdown("**描述性指标（Characterization Axes）**")
+    show_metric_table(desc_metrics, digits=2, empty_text="暂无描述性 ARM 指标。")
+
+st.markdown("**医院报告参考范围判定**")
+
+metric_judgements = []
+feature_states = []
+
+if version_patient_result and "raw_row" in version_patient_result:
+    metric_judgements = extract_metric_judgements(version_patient_result["raw_row"])
+    feature_states = extract_feature_states(version_patient_result["raw_row"])
+
+    judge_df = pd.DataFrame(metric_judgements)
+
+    if not judge_df.empty:
+        judge_df = judge_df.rename(
+            columns={
+                "metric": "指标",
+                "value": "患者数值",
+                "sex": "性别",
+                "status": "状态",
+                "low": "参考下限",
+                "high": "参考上限",
+                "center": "参考中心",
+                "reference_group": "参考范围来源",
+                "state_text": "解释",
+            }
+        )
+
+        show_cols = [
+            "指标",
+            "患者数值",
+            "性别",
+            "状态",
+            "参考下限",
+            "参考上限",
+            "参考中心",
+            "参考范围来源",
+            "解释",
+        ]
+
+        show_cols = [c for c in show_cols if c in judge_df.columns]
+
+        st.dataframe(
+            judge_df[show_cols],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        if not is_patient_user:
+            with st.expander("调试：医院指标列名匹配情况"):
+                debug_rows = debug_metric_mapping(version_patient_result["raw_row"])
+                debug_df = pd.DataFrame(debug_rows)
+                st.dataframe(debug_df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("当前患者暂无可判定的医院参考范围指标。")
+else:
+    st.caption("当前版本结果文件中暂无患者原始临床指标，无法进行医院参考范围判定。")
+
+st.divider()
+
+# -----------------------------
+# Representation & RAIR
+# -----------------------------
+col_a, col_b = st.columns(2)
+
+with col_a:
+    st.subheader("ARM 协议阶段贡献（Representation Contribution）")
+    protocol_contrib = representation.get("protocol_contribution", {})
+    protocol_topk_details = safe_list(representation.get("protocol_topk_details"))
+
+    if not protocol_contrib:
+        st.caption("暂无各协议阶段对患者表征的贡献信息。")
+    elif isinstance(protocol_contrib, dict) and protocol_contrib.get("available") is False:
+        st.caption(protocol_contrib.get("message", "当前患者页暂未接入协议级 attention 贡献明细。"))
+    else:
+        numeric_items = {
+            k: v for k, v in safe_dict(protocol_contrib).items()
+            if isinstance(v, (int, float)) and k != "available"
+        }
+        if numeric_items:
+            df_proto = pd.DataFrame(list(numeric_items.items()), columns=["协议阶段", "贡献度"])
+            st.bar_chart(df_proto.set_index("协议阶段"), height=220)
+            df_proto["贡献度"] = df_proto["贡献度"].apply(lambda x: fmt_number(x, 3))
+            st.dataframe(df_proto, use_container_width=True, hide_index=True)
+        else:
+            st.caption("当前协议贡献结果尚未结构化为可视化数值。")
+
+    if protocol_topk_details and not is_patient_user:
+        with st.expander("查看 top-k 关键帧解释"):
+            df_topk = pd.DataFrame(protocol_topk_details)
+            show_cols = [
+                c for c in ["protocol", "rank", "filename", "score", "weight"]
+                if c in df_topk.columns
+            ]
+            if not df_topk.empty and show_cols:
+                if "score" in df_topk.columns:
+                    df_topk["score"] = df_topk["score"].apply(lambda x: fmt_number(x, 3))
+                if "weight" in df_topk.columns:
+                    df_topk["weight"] = df_topk["weight"].apply(lambda x: fmt_number(x, 3))
+                st.dataframe(df_topk[show_cols], use_container_width=True, hide_index=True)
+            else:
+                st.caption("top-k 关键帧解释结果为空。")
+    elif not protocol_topk_details:
+        st.caption("暂无 top-k 关键帧解释结果。")
+
+with col_b:
+    st.subheader("RAIR 生理反射证据")
+    time_series = rair.get("time_series")
+    features = rair.get("features", {})
+
+    if time_series is None:
+        st.caption("暂无 RAIR 时间序列数据。")
+    else:
+        try:
+            ts = np.array(time_series)
+            if ts.size == 0:
+                st.caption("RAIR 时间序列为空。")
+            else:
+                st.line_chart(ts, height=220)
+        except Exception:
+            st.caption("RAIR 时间序列存在，但暂时无法可视化。")
+
+    if not features:
+        st.caption("暂无 RAIR 患者级特征。")
+    elif isinstance(features, dict) and features.get("available") is False:
+        st.caption(features.get("message", "暂无 RAIR 患者级特征。"))
+    else:
+        display_features = {
+            "剂量 (ml)": features.get("dose_ml"),
+            "剂量是否有效": features.get("dose_valid"),
+            "事件编号": features.get("event_id"),
+            "事件是否有效": features.get("event_valid"),
+            "基线压力": features.get("baseline_pressure"),
+            "最低压力": features.get("min_pressure"),
+            "松弛幅度": features.get("relaxation_amplitude"),
+            "达到最低点时间": features.get("t_min"),
+            "是否可恢复": features.get("recovery_possible"),
+            "帧数": features.get("n_frames"),
+        }
+        display_features = {k: v for k, v in display_features.items() if v is not None}
+        if display_features:
+            df_rair = pd.DataFrame(list(display_features.items()), columns=["特征", "数值"])
+            df_rair["数值"] = df_rair["数值"].apply(lambda x: fmt_number(x, 3))
+            st.dataframe(df_rair, use_container_width=True, hide_index=True)
+        else:
+            st.caption("当前患者无可显示的 RAIR 特征。")
+
+    if not is_patient_user:
+        with st.expander("调试：查看 RAIR 路径解析"):
+            st.json(safe_dict(rair.get("debug")))
+
+st.divider()
+
+# -----------------------------
+# Stability & Rome IV
+# -----------------------------
+col_c, col_d = st.columns(2)
+
+with col_c:
+    st.subheader("聚类稳定性细节（随机种子级别）")
+
+    stability_label = stab.get("label", "-")
+    stab_confidence = stab.get("confidence")
+    switch_rate_val = stab.get("switch_rate")
+    is_boundary_val = bool(stab.get("is_boundary", False))
+
+    st.markdown(f"**稳定性标签：** {stability_label}")
+
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        st.metric("Confidence", fmt_number(stab_confidence, 2))
+    with s2:
+        st.metric("Switch Rate", fmt_number(switch_rate_val, 2))
+    with s3:
+        st.metric("边界患者", "是" if is_boundary_val else "否")
+
+    if is_boundary_val:
+        st.warning("该患者属于边界患者，说明其聚类归属在不同随机种子下存在一定波动。")
+    else:
+        st.success("该患者属于稳定患者，说明其聚类归属在不同随机种子下较为一致。")
+
+st.caption(
+    f"当前版本采用 confidence ≥ {boundary_threshold} 视为稳定患者，"
+    f"confidence < {boundary_threshold} 视为边界患者。"
+)
+
+seed_assignments = safe_dict(stab.get("seed_assignments"))
+if seed_assignments and not is_patient_user:
+    st.markdown("**随机种子分配详情**")
+    df_seed = pd.DataFrame(
+        list(seed_assignments.items()),
+        columns=["随机种子", "分配的 Cluster"]
+    ).sort_values("随机种子")
+    st.dataframe(df_seed, use_container_width=True, hide_index=True)
+elif not seed_assignments and not is_patient_user:
+    st.caption("当前未接入逐 seed 标签分配结果。")
+
+with col_d:
+    st.subheader("外部临床参考（Rome IV 代理分类）")
+    if not rome or rome.get("category") is None:
+        st.caption("暂无 Rome IV 代理分类信息。")
+    else:
+        st.markdown(f"**Rome IV 分类：** {rome.get('category', '-')}")
+        st.markdown(f"**推进力：** {rome.get('propulsion', '-') or '-'}")
+        st.markdown(f"**协调性：** {rome.get('coordination', '-') or '-'}")
+
+        ratio = rome.get("ratio_msp_mrp")
+        if ratio is not None:
+            st.write(f"**MSP/MRP 比值：** {fmt_number(ratio, 3)}")
+
+        if rome.get("proxy_type"):
+            st.caption(f"代理类型：{rome.get('proxy_type')}")
+
+        rules = safe_list(rome.get("rules"))
+        if rules:
+            st.markdown("**判定依据**")
+            for rule in rules:
+                st.write(f"- {rule}")
+
+st.divider()
+
+# -----------------------------
+# Group statistics
+# -----------------------------
+version = current_version.get("display_name", selected_version)
+summary = ""
+suggestion = ""
+
+if group_stats:
+    version = group_stats.get("version", version)
+    summary = group_stats.get("summary", "")
+    suggestion = group_stats.get("suggestion", "")
+
+if not summary:
+    summary = (
+        f"当前患者页展示的是 {current_version.get('short_name', selected_version)} "
+        f"版本下的患者分型结果。"
+    )
+
+if not suggestion:
+    suggestion = "请结合患者临床指标、RAIR 反射证据及 Rome IV proxy 信息进行科研解释。"
+
+if not is_patient_user:
+    st.subheader("群体统计参考")
+    st.info(f"版本：{version}\n\n{summary}\n\n{suggestion}")
+    st.page_link(
+        "pages/4_Statistics_View.py",
+        label="打开 Statistics View 查看完整统计结果",
+        icon="📊"
+    )
+    st.divider()
+
+# -----------------------------
+# LLM analysis
+# -----------------------------
+st.subheader("🤖 AI 智能分析")
+
+llm_status = get_llm_runtime_status()
+
+st.caption(
+    "LLM_MODE: "
+    f"use_real_api={llm_status.get('use_real_api')}, "
+    f"enable_raw={llm_status.get('enable_raw')}, "
+    f"provider={llm_status.get('provider')}, "
+    f"model={llm_status.get('model')}, "
+    f"env={llm_status.get('env_path')}"
+)
+
+kg_paths_for_llm = []
+
+if GRAPH_FEATURE_AVAILABLE:
+    try:
+        kg_for_llm = load_patient_graph(patient_id)
+        kg_paths_for_llm = safe_list(kg_for_llm.get("paths"))
+    except Exception:
+        kg_paths_for_llm = []
+
+llm_context = build_llm_context(
+    patient_id=patient_id,
+    ai=ai,
+    stability=stab,
+    metric_judgements=metric_judgements,
+    feature_states=feature_states,
+    rair=rair,
+    rome=rome,
+    rag=rag,
+    kg_paths=kg_paths_for_llm,
+)
+
+generated_report = generate_llm_report(llm_context)
+
+tab_generated, tab_backend, tab_debug = st.tabs(
+    ["结构化科研解释报告", "后端原始 AI 分析", "调试输入"]
+)
+
+with tab_generated:
+    st.caption(
+        "该报告由当前页面结构化结果生成。LLM/规则解释模块不参与患者分型，"
+        "仅用于科研解释与系统展示。"
+    )
+    st.markdown(generated_report)
+
+with tab_backend:
+    st.markdown("**分析摘要**")
+    st.write(llm_analysis.get("summary", "暂无分析摘要。"))
+
+    st.markdown("**关键发现**")
+    key_findings = safe_list(llm_analysis.get("key_findings"))
+    if key_findings:
+        for finding in key_findings:
+            st.write(f"- {finding}")
+    else:
+        st.caption("暂无关键发现。")
+
+    st.markdown("**临床意义**")
+    st.write(llm_analysis.get("clinical_significance", "暂无临床意义说明。"))
+
+    st.markdown("**建议**")
+    recommendations = safe_list(llm_analysis.get("recommendations"))
+    if recommendations:
+        for rec in recommendations:
+            st.write(f"- {rec}")
+    else:
+        st.caption("暂无建议。")
+
+with tab_debug:
+    if not is_patient_user:
+        st.json(llm_context)
+    else:
+        st.caption("患者角色不展示调试输入。")
+
+st.divider()
+
+# -----------------------------
+# Knowledge Graph
+# -----------------------------
+st.subheader("🕸️ 知识图谱解释")
+
+if not GRAPH_FEATURE_AVAILABLE:
+    st.info("当前环境未安装 Neo4j / pyvis 相关依赖，知识图谱模块暂不可用。其他患者分析功能可正常使用。")
+    if GRAPH_IMPORT_ERROR:
+        st.caption(f"导入信息：{GRAPH_IMPORT_ERROR}")
+    st.divider()
+else:
+    kg_btn_col1, kg_btn_col2 = st.columns([1, 4])
+    with kg_btn_col1:
+        refresh_graph_btn = st.button("生成/刷新知识图谱", use_container_width=True)
+
+    graph_error = None
+    if refresh_graph_btn:
+        with st.spinner("正在构建知识图谱..."):
+            graph_error = sync_patient_graph(patient_id, patient)
+        if graph_error:
+            st.error(f"知识图谱更新失败：{graph_error}")
+        else:
+            st.success("知识图谱已更新。")
+
+    try:
+        kg = load_patient_graph(patient_id)
+    except Exception as e:
+        kg = {"nodes": [], "edges": [], "paths": []}
+        st.caption(f"知识图谱暂不可用：{e}")
+
+    if not kg.get("nodes"):
+        st.caption("当前患者暂无知识图谱数据。可点击上方按钮生成。")
+    else:
+        st.markdown("**关键解释路径**")
+        paths = safe_list(kg.get("paths"))
+        if paths:
+            for idx, path in enumerate(paths, 1):
+                st.write(f"{idx}. " + " → ".join([str(x) for x in path if x]))
+        else:
+            st.caption("暂无解释路径。")
+
+        kg_summary_col1, kg_summary_col2, kg_summary_col3 = st.columns(3)
+        with kg_summary_col1:
+            st.metric("节点数", len(safe_list(kg.get("nodes"))))
+        with kg_summary_col2:
+            st.metric("关系数", len(safe_list(kg.get("edges"))))
+        with kg_summary_col3:
+            st.metric("解释路径数", len(paths))
+
+        st.markdown("**图谱可视化（已自动精简显示）**")
+        render_knowledge_graph_pyvis(
+            safe_list(kg.get("nodes")),
+            safe_list(kg.get("edges")),
+            height=760,
+        )
+
+        with st.expander("查看图谱节点"):
+            nodes_df = pd.DataFrame(safe_list(kg.get("nodes")))
+            if not nodes_df.empty:
+                st.dataframe(nodes_df, use_container_width=True, hide_index=True)
+            else:
+                st.caption("暂无节点。")
+
+        with st.expander("查看图谱关系"):
+            edges_df = pd.DataFrame(safe_list(kg.get("edges")))
+            if not edges_df.empty:
+                st.dataframe(edges_df, use_container_width=True, hide_index=True)
+            else:
+                st.caption("暂无关系。")
+
+    st.divider()
+
+# -----------------------------
+# RAG section
+# -----------------------------
+if not is_patient_user:
+    st.subheader("📚 文献检索解释（RAG）")
+
+    rag_input_features = safe_dict(rag.get("input_features"))
+    rag_chunks = safe_list(rag.get("retrieved_chunks"))
+    rag_explanation = safe_dict(rag.get("explanation"))
+
+    left_rag, right_rag = st.columns(2)
+
+    with left_rag:
+        st.markdown("**检索输入特征**")
+        if rag_input_features:
+            df_rag_input = pd.DataFrame(
+                list(rag_input_features.items()),
+                columns=["特征", "取值"]
+            )
+            st.dataframe(df_rag_input, use_container_width=True, hide_index=True)
+        else:
+            st.caption("暂无 RAG 输入特征。")
+
+    with right_rag:
+        st.markdown("**解释摘要**")
+        st.write(rag_explanation.get("summary", "暂无"))
+        st.markdown("**解释说明**")
+        st.write(rag_explanation.get("interpretation", "暂无"))
+        st.markdown("**不确定性**")
+        st.info(rag_explanation.get("uncertainty", "暂无"))
+
+    st.markdown("**召回证据明细**")
+    if rag_chunks:
+        for i, chunk in enumerate(rag_chunks, 1):
+            chunk = safe_dict(chunk)
+            chunk_id = chunk.get("chunk_id", "")
+            score = chunk.get("score", 0)
+            title = chunk.get("title", "")
+            source = chunk.get("source", "")
+            matched_terms = chunk.get("matched_terms", [])
+            matched_tags = chunk.get("matched_tags", [])
+            chunk_text = chunk.get("chunk_text", "")
+
+            exp_title = f"{i}. {chunk_id or '未知Chunk'} | score={fmt_number(score, 3)}"
+            with st.expander(exp_title):
+                st.write(f"**标题：** {title or '-'}")
+                st.write(f"**来源：** {source or '-'}")
+                st.write(f"**匹配词：** {matched_terms if matched_terms else '-'}")
+                st.write(f"**匹配标签：** {matched_tags if matched_tags else '-'}")
+                st.write("**证据内容：**")
+                st.write(chunk_text or "暂无内容。")
+    else:
+        st.warning("当前没有召回到文献证据。请检查知识库字段、标签映射或检索规则。")
+
+    st.divider()
+
+    st.subheader("📚 专家知识推荐")
+    if not rag_recommendations:
+        st.caption("暂无专家知识推荐。")
+    else:
+        for i, rec in enumerate(rag_recommendations, 1):
+            rec = safe_dict(rec)
+            title = rec.get("title", f"推荐 {i}")
+            score = rec.get("score")
+            content = rec.get("text", "")
+            source = rec.get("source", "未知来源")
+            chunk_id = rec.get("chunk_id", "")
+
+            header = f"{i}. {title}"
+            if score is not None:
+                try:
+                    header += f"（score: {float(score):.2f}）"
+                except Exception:
+                    pass
+
+            with st.expander(header):
+                if chunk_id:
+                    st.write(f"**Chunk ID：** {chunk_id}")
+                st.write(content or "暂无内容。")
+                st.caption(f"来源: {source}")
+
+    st.divider()
+
+    with st.expander("调试：查看原始 RAG 输出"):
+        st.json(rag)
+
+st.caption("⚠️ 本系统仅用于科研与功能表型分析，不用于临床诊断或治疗决策。")

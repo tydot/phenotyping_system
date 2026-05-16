@@ -1,0 +1,59 @@
+# ============================================
+# 排便障碍分型系统 - 全局配置
+# ============================================
+
+# === 数据路径 ===
+data:
+  raw_image_dir: "data/raw"
+  processed_dir: "data/processed"
+  results_dir: "data/results"
+  clinical_report_path: null
+
+# === 模型配置 ===
+model:
+  backbone: "dinov2"
+  pooling_method: "attention"        # mean / attention
+  attention_temperature: 0.07
+  attention_topk: 8
+  
+# === 聚类参数 ===
+clustering:
+  n_clusters: 3
+  n_seeds: 10
+  confidence_threshold: 0.8
+  dim_reduction: "pca"
+  pca_components: 100
+  
+# === 协议参数 ===
+protocols:
+  required:
+    - "Rest"
+    - "Squeeze"
+    - "Defecation"
+  optional:
+    - "Cough"
+    - "RAIR"
+  mapp:
+    default: 6
+    
+# === Rome IV 判定阈值 ===
+rome_iv:
+  propulsion_threshold: 45.0
+  coordination:
+    msp_mrp_ratio_low: 2.0
+    msp_mrp_ratio_high: 6.0
+    duration_threshold: 3.0
+    
+# === 可视化 ===
+visualization:
+  umap_n_neighbors: 15
+  umap_min_dist: 0.1
+  color_palette:
+    - "#FF6B6B"
+    - "#4ECDC4"
+    - "#45B7D1"
+    
+# === 日志 ===
+logging:
+  level: "INFO"
+  file: "logs/system.log"

@@ -1,0 +1,167 @@
+﻿import os
+import re
+import json
+import base64
+import tempfile
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+from dotenv import load_dotenv
+from openai import OpenAI
+
+
+ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(ROOT / ".env.xiaomi", override=True, encoding="utf-8-sig")
+load_dotenv(ROOT / ".env", override=False, encoding="utf-8-sig")
+
+
+def get_client():
+    api_key = os.getenv("XIAOMI_API_KEY", "").strip()
+    base_url = os.getenv("XIAOMI_BASE_URL", "").strip()
+
+    if not api_key:
+        raise RuntimeError("未找到 XIAOMI_API_KEY，请检查 .env.xiaomi")
+    if not base_url:
+        raise RuntimeError("未找到 XIAOMI_BASE_URL，请检查 .env.xiaomi")
+
+    return OpenAI(api_key=api_key, base_url=base_url)
+
+
+def get_model():
+    model = os.getenv("XIAOMI_VLM_MODEL", "").strip()
+    if not model:
+        raise RuntimeError("未找到 XIAOMI_VLM_MODEL，请检查 .env.xiaomi")
+    return model
+
+
+def npy_to_png(npy_path: Path, out_png: Path):
+    arr = np.load(npy_path)
+
+    if arr.ndim == 3 and arr.shape[0] in (1, 3, 4):
+        arr = arr[:3]
+        arr = np.transpose(arr, (1, 2, 0))
+    elif arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+    elif arr.ndim == 3 and arr.shape[-1] in (1, 3, 4):
+        arr = arr[..., :3]
+    else:
+        raise ValueError(f"无法识别 npy 图像形状: {arr.shape}")
+
+    arr = arr.astype(np.float32)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+
+    mn = float(np.min(arr))
+    mx = float(np.max(arr))
+
+    if mn >= 0.0 and mx <= 1.5:
+        img = arr * 255.0
+    elif mn >= 0.0 and mx <= 255.0:
+        img = arr
+    else:
+        lo, hi = np.percentile(arr, [1, 99])
+        if hi <= lo:
+            hi = lo + 1.0
+        img = (arr - lo) / (hi - lo) * 255.0
+
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    Image.fromarray(img).save(out_png)
+
+
+def image_to_data_url(path: Path):
+    suffix = path.suffix.lower()
+
+    if suffix == ".npy":
+        tmp_dir = Path(tempfile.gettempdir()) / "m6_real_vlm_png"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        png_path = tmp_dir / (path.stem + ".png")
+        npy_to_png(path, png_path)
+        path = png_path
+        mime = "image/png"
+    elif suffix in [".png"]:
+        mime = "image/png"
+    elif suffix in [".jpg", ".jpeg"]:
+        mime = "image/jpeg"
+    else:
+        raise ValueError(f"不支持的图像文件类型: {path}")
+
+    data = base64.b64encode(path.read_bytes()).decode("utf-8")
+    return f"data:{mime};base64,{data}"
+
+
+def extract_json(text: str):
+    text = text.strip()
+
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    m = re.search(r"\{.*\}", text, flags=re.S)
+    if not m:
+        raise ValueError(f"模型输出中没有找到 JSON: {text[:300]}")
+
+    return json.loads(m.group(0))
+
+
+def call_xiaomi_vlm(image_path: Path, protocol: str):
+    client = get_client()
+    model = get_model()
+
+    data_url = image_to_data_url(image_path)
+
+    prompt = f"""
+你是一名肛门直肠测压图像质量与模式粗筛助手。
+请只根据图像本身和协议类型进行粗略判断，不要诊断具体疾病。
+
+协议类型: {protocol}
+
+请输出严格 JSON，不要 Markdown，不要解释多余文字。
+字段如下：
+{{
+  "vlm_score_raw": 0到3的整数，0表示几乎无有效信息，1表示弱阳性或质量差，2表示中等可信，3表示模式较清楚且质量较好,
+  "vlm_image_quality": "good"、"fair" 或 "poor",
+  "vlm_pattern_label": 简短中文标签,
+  "vlm_reason": 60字以内中文理由,
+  "vlm_uncertain": true 或 false
+}}
+""".strip()
+
+    resp = client.chat.completions.create(
+        model=model,
+        temperature=0,
+        max_tokens=300,
+        messages=[
+            {
+                "role": "system",
+                "content": "你只输出合法 JSON。"
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            },
+        ],
+    )
+
+    text = resp.choices[0].message.content
+    obj = extract_json(text)
+
+    raw = int(obj.get("vlm_score_raw", 0))
+    raw = max(0, min(3, raw))
+    norm = raw / 3.0
+    reweight = 0.25 + 0.75 * norm
+
+    return {
+        "vlm_score_raw": raw,
+        "vlm_image_quality": str(obj.get("vlm_image_quality", "fair")),
+        "vlm_pattern_label": str(obj.get("vlm_pattern_label", "")),
+        "vlm_reason": str(obj.get("vlm_reason", "")),
+        "vlm_uncertain": bool(obj.get("vlm_uncertain", False)),
+        "vlm_mode": "real_xiaomi",
+        "vlm_score_norm": norm,
+        "vlm_reweight_factor": reweight,
+        "vlm_raw_response": text,
+    }

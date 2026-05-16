@@ -1,0 +1,213 @@
+﻿from pathlib import Path
+import os
+import json
+import base64
+from io import BytesIO
+
+import numpy as np
+from PIL import Image
+from dotenv import load_dotenv
+from openai import OpenAI
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+load_dotenv(ROOT / ".env.xiaomi", override=True, encoding="utf-8-sig")
+load_dotenv(ROOT / ".env", override=True, encoding="utf-8-sig")
+
+DEBUG_SEND_DIR = ROOT / "outputs" / "vlm_debug_sent"
+DEBUG_SEND_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_client():
+    api_key = os.getenv("XIAOMI_API_KEY", "").strip()
+    base_url = os.getenv("XIAOMI_BASE_URL", "").strip()
+
+    if not api_key:
+        raise RuntimeError("未找到 XIAOMI_API_KEY，请检查 .env.xiaomi")
+    if not base_url:
+        raise RuntimeError("未找到 XIAOMI_BASE_URL，请检查 .env.xiaomi")
+
+    return OpenAI(api_key=api_key, base_url=base_url)
+
+
+def get_model():
+    model = os.getenv("XIAOMI_VLM_MODEL", "").strip()
+    if not model:
+        raise RuntimeError("未找到 XIAOMI_VLM_MODEL，请检查 .env.xiaomi")
+    return model
+
+
+def npy_to_uint8_image(path):
+    arr = np.load(path)
+
+    if arr.ndim == 3 and arr.shape[0] in [1, 3, 4]:
+        arr = np.transpose(arr, (1, 2, 0))
+
+    if arr.ndim == 2:
+        arr = np.stack([arr, arr, arr], axis=-1)
+
+    if arr.ndim == 3 and arr.shape[-1] == 1:
+        arr = np.repeat(arr, 3, axis=-1)
+
+    if arr.ndim == 3 and arr.shape[-1] > 3:
+        arr = arr[..., :3]
+
+    arr = arr.astype(np.float32)
+    finite = np.isfinite(arr)
+
+    if not finite.any():
+        raise ValueError(f"array has no finite values: {path}")
+
+    vmin = float(np.nanmin(arr))
+    vmax = float(np.nanmax(arr))
+
+    if vmin >= 0 and vmax <= 1.5:
+        arr = arr * 255.0
+    elif vmin >= 0 and vmax <= 255:
+        arr = arr
+    else:
+        lo, hi = np.percentile(arr[finite], [1, 99])
+        if hi <= lo:
+            lo, hi = vmin, vmax
+        arr = (arr - lo) / max(hi - lo, 1e-6) * 255.0
+
+    arr = np.clip(arr, 0, 255).astype(np.uint8)
+    return Image.fromarray(arr)
+
+
+def image_to_data_url(image_path, debug_name=None):
+    image_path = Path(image_path)
+    img = npy_to_uint8_image(image_path)
+
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    if debug_name:
+        safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in debug_name)
+        debug_path = DEBUG_SEND_DIR / f"{safe_name}.png"
+        img.save(debug_path)
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return f"data:image/png;base64,{b64}"
+
+
+def extract_json(text):
+    if text is None:
+        raise ValueError("empty model content")
+
+    s = text.strip()
+
+    if s.startswith("```"):
+        s = s.strip("`")
+        s = s.replace("json", "", 1).strip()
+
+    start = s.find("{")
+    end = s.rfind("}")
+
+    if start < 0 or end < 0 or end <= start:
+        raise ValueError(f"未找到 JSON: {repr(text[:300])}")
+
+    return json.loads(s[start:end + 1])
+
+
+def normalize_result(obj):
+    score = obj.get("vlm_score_raw", 1)
+
+    try:
+        score = int(score)
+    except Exception:
+        score = 1
+
+    score = max(1, min(4, score))
+
+    quality = str(obj.get("vlm_image_quality", "fair")).strip().lower()
+    if quality not in ["poor", "fair", "good", "excellent"]:
+        quality = "fair"
+
+    label = str(obj.get("vlm_pattern_label", "")).strip()
+    reason = str(obj.get("vlm_reason", "")).strip()
+
+    uncertain = obj.get("vlm_uncertain", True)
+    if isinstance(uncertain, str):
+        uncertain = uncertain.strip().lower() in ["true", "1", "yes", "y", "是"]
+
+    return {
+        "vlm_score_raw": score,
+        "vlm_image_quality": quality,
+        "vlm_pattern_label": label,
+        "vlm_reason": reason,
+        "vlm_uncertain": bool(uncertain),
+    }
+
+
+def build_prompt(protocol):
+    return f"""
+你是一名辅助分析肛肠测压伪彩色压力图的医学图像质控助手。
+
+当前图像对应检查协议是：{protocol}
+
+图像说明：
+- 这不是普通照片，也不一定是传统折线图。
+- 这是一张由肛肠测压数据转换得到的伪彩色压力热图。
+- 颜色和纹理反映压力变化模式。
+- 你只需要基于图像可见的压力分布、连续性、条带、峰值和伪影进行粗略评分。
+- 不要因为它是伪彩色热图就判定为“过暗”或“无法识别”。
+
+请只输出 JSON，不要输出解释、Markdown 或代码块。
+
+JSON 格式必须是：
+{{
+  "vlm_score_raw": 1,
+  "vlm_image_quality": "poor",
+  "vlm_pattern_label": "一句中文标签",
+  "vlm_reason": "一句中文理由",
+  "vlm_uncertain": true
+}}
+
+评分含义：
+1 = 图像质量差、严重伪影、模式基本不可判断
+2 = 图像质量一般，能看到部分模式但不稳定或不清晰
+3 = 图像质量较好，协议相关压力模式较清楚
+4 = 图像质量很好，协议相关压力模式清晰、连续、代表性强
+
+请根据图像内容给出 1 到 4 的整数评分。
+""".strip()
+
+
+def call_xiaomi_vlm(image_path, protocol):
+    client = get_client()
+    model = get_model()
+
+    debug_name = f"{Path(image_path).stem}_{protocol}"
+    data_url = image_to_data_url(image_path, debug_name=debug_name)
+    prompt = build_prompt(protocol)
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": data_url,
+                        },
+                    },
+                ],
+            }
+        ],
+        temperature=0,
+        max_tokens=512,
+    )
+
+    content = resp.choices[0].message.content
+    obj = extract_json(content)
+    return normalize_result(obj)

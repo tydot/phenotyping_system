@@ -1,0 +1,43 @@
+# === 核心框架 ===
+streamlit>=1.31,<2
+
+# === 数据处理 ===
+numpy>=2.3,<3
+pandas>=2.2,<3
+scikit-learn>=1.6,<2
+scipy>=1.16.1,<2
+
+# === 可视化 ===
+plotly>=5.17,<7
+matplotlib>=3.9,<4
+seaborn>=0.13,<1
+umap-learn>=0.5.12,<0.6
+
+# === 配置管理 ===
+pyyaml>=6.0,<7
+
+# === 统计检验 ===
+pingouin>=0.5.3,<1
+
+# === 报告生成 ===
+fpdf==1.7.2
+openpyxl>=3.1.2,<4
+
+# === 图像处理 ===
+Pillow>=10.4,<13
+opencv-python-headless>=4.10,<5
+
+# === 工具库 ===
+tqdm>=4.66,<5
+loguru>=0.7,<1
+
+# === 知识库 ===
+neo4j>=5.20
+pyvis
+
+# === 推理依赖 ===
+torch>=2.10,<2.11
+torchvision>=0.25,<0.26
+
+# === LLM推理（可选）===
+# openai>=1.6,<2
