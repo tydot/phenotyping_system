@@ -1659,7 +1659,7 @@ if st.sidebar.button("刷新患者数据", key=f"refresh_patient_{selected_versi
 
 default_image_root = os.environ.get(
     "PREPROCESSED_FEATURES_DIR",
-    str(ROOT_DIR / "preprocessed_features"),
+    str(ROOT_DIR / "preprocessed_features_images"),
 )
 
 image_root_input = st.sidebar.text_input(
