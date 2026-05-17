@@ -91,9 +91,21 @@ def normalize_cluster_df(df: pd.DataFrame, boundary_threshold: float) -> pd.Data
     df = df.copy()
 
     patient_col = find_first_existing_col(
-        df,
-        ["patient_id", "patient", "PatientID", "Patient_ID", "id", "病例号", "患者编号"],
-    )
+    df,
+    [
+        "patient_id",
+        "pid_key",
+        "pid",
+        "PID",
+        "patient",
+        "PatientID",
+        "Patient_ID",
+        "id",
+        "病例号",
+        "患者编号",
+        "患者ID",
+    ],
+)
 
     cluster_col = find_first_existing_col(
         df,
@@ -152,9 +164,12 @@ def normalize_cluster_df(df: pd.DataFrame, boundary_threshold: float) -> pd.Data
         df["confidence"] = None
 
     if "is_boundary" not in df.columns:
-        df["is_boundary"] = df["confidence"].apply(
-            lambda x: bool(pd.notnull(x) and float(x) < boundary_threshold)
-        )
+        if "confidence" in df.columns and df["confidence"].notna().any():
+            df["is_boundary"] = df["confidence"].apply(
+                lambda x: bool(pd.notnull(x) and float(x) < boundary_threshold)
+            )
+        else:
+            df["is_boundary"] = pd.NA
     else:
         def normalize_bool(x):
             if isinstance(x, bool):
@@ -175,9 +190,10 @@ def build_kv_df(data: Dict[str, Any], key_name: str, value_name: str) -> pd.Data
 
 def pick_metric_columns(df: pd.DataFrame):
     """
-    从临床联合表里尽量自动识别核心数值指标。
+    从临床联合表里识别真正的 ARM 功能指标。
+    明确排除患者编号、聚类标签、置信度、版本信息等非生理指标。
     """
-    preferred = [
+    preferred_keywords = [
         "resting_pressure",
         "msp",
         "squeeze_duration",
@@ -188,47 +204,66 @@ def pick_metric_columns(df: pd.DataFrame):
         "first_sensation",
         "desire_to_defecate",
         "urgency_threshold",
+
         "肛门括约肌静息压",
+        "静息压",
         "最大缩榨压",
+        "缩榨压",
         "缩肛持续时间",
         "排便时直肠压力",
         "最大容量感觉阈值",
+        "最大耐受容量",
         "肛门括约肌长度",
+        "肛管长度",
         "RAIR诱发最小容积",
         "初始感觉阈值",
         "初始便意阈值",
         "排便窘迫感阈值",
     ]
 
-    numeric_cols = []
-    for col in preferred:
-        if col in df.columns:
-            numeric_cols.append(col)
-
-    if numeric_cols:
-        return numeric_cols
-
-    exclude = {
-        "patient_id",
-        "consensus_cluster",
-        "cluster",
-        "confidence",
-        "is_boundary",
-        "sex",
-        "gender",
-        "main_symptom",
+    exclude_keywords = [
+        "pid",
+        "patient",
+        "id",
+        "key",
+        "编号",
+        "病例号",
+        "姓名",
         "name",
-    }
+        "cluster",
+        "label",
+        "分型",
+        "consensus",
+        "confidence",
+        "置信度",
+        "boundary",
+        "边界",
+        "stable",
+        "稳定",
+        "version",
+        "版本",
+        "fold",
+        "seed",
+        "index",
+    ]
 
-    candidates = []
+    metric_cols = []
+
     for col in df.columns:
-        if col in exclude:
-            continue
-        series = pd.to_numeric(df[col], errors="coerce")
-        if series.notnull().sum() > 0:
-            candidates.append(col)
+        col_str = str(col)
+        col_lower = col_str.lower()
 
-    return candidates[:10]
+        if any(k in col_lower for k in exclude_keywords):
+            continue
+
+        if not any(k.lower() in col_lower for k in preferred_keywords):
+            continue
+
+        values = pd.to_numeric(df[col], errors="coerce")
+        if values.notnull().sum() > 0:
+            metric_cols.append(col)
+
+    return metric_cols[:12]
 
 
 def build_median_profile(cluster_df: pd.DataFrame, metric_cols) -> Dict[str, float]:
@@ -383,7 +418,10 @@ if cluster_df.empty:
     st.stop()
 
 size = len(cluster_df)
-stable_ratio = 1.0 - float(cluster_df["is_boundary"].mean()) if "is_boundary" in cluster_df.columns else None
+if "is_boundary" in cluster_df.columns and cluster_df["is_boundary"].notna().any():
+    stable_ratio = 1.0 - float(cluster_df["is_boundary"].dropna().mean())
+else:
+    stable_ratio = None
 
 metric_cols = pick_metric_columns(clinical_df)
 profile = build_median_profile(cluster_df, metric_cols)
