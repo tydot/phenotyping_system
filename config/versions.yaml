@@ -23,6 +23,9 @@ versions:
     files:
       consensus_labels: "processed/M1/consensus_labels.csv"
       clinical_with_clusters: "processed/M1/merged_clinical_all.csv"
+      patient_clinical: "processed/M1/merged_clinical_all.csv"
+      cohort_table: "processed/M1/merged_clinical_all.csv"
+      merged_clinical: "processed/M1/merged_clinical_all.csv"
       kruskal_stable: "processed/M1/stats/M1_新公平_Attn_topk4_kruskal.csv"
       dunn_stable: "processed/M1/stats/M1_新公平_Attn_topk4_dunn.csv"
       rair_validation: "processed/M1/rair_analysis/rair_with_clusters_M1.csv"
@@ -44,6 +47,9 @@ versions:
     files:
       consensus_labels: "processed/M2/consensus_labels.csv"
       clinical_with_clusters: "processed/M2/merged_clinical_all.csv"
+      patient_clinical: "processed/M2/merged_clinical_all.csv"
+      cohort_table: "processed/M2/merged_clinical_all.csv"
+      merged_clinical: "processed/M2/merged_clinical_all.csv"
       kruskal_stable: "processed/M2/stats/M2_新公平_Attn_topk6_kruskal.csv"
       dunn_stable: "processed/M2/stats/M2_新公平_Attn_topk6_dunn.csv"
       rair_validation: "processed/M2/rair_analysis/rair_with_clusters_M2.csv"
@@ -66,6 +72,9 @@ versions:
     files:
       consensus_labels: "processed/M3/consensus_labels.csv"
       clinical_with_clusters: "processed/M3/merged_clinical_all.csv"
+      patient_clinical: "processed/M3/merged_clinical_all.csv"
+      cohort_table: "processed/M3/merged_clinical_all.csv"
+      merged_clinical: "processed/M3/merged_clinical_all.csv"
       kruskal_stable: "processed/M3/stats/M3_新公平_Mean_topk0_kruskal.csv"
       dunn_stable: "processed/M3/stats/M3_新公平_Mean_topk0_dunn.csv"
       rair_validation: "processed/M3/rair_analysis/rair_with_clusters_M3.csv"
@@ -87,6 +96,9 @@ versions:
     files:
       consensus_labels: "processed/M4/consensus_labels.csv"
       clinical_with_clusters: "processed/M4/merged_clinical_all.csv"
+      patient_clinical: "processed/M4/merged_clinical_all.csv"
+      cohort_table: "processed/M4/merged_clinical_all.csv"
+      merged_clinical: "processed/M4/merged_clinical_all.csv"
       kruskal_stable: "processed/M4/stats/M4_旧随机_Attn_topk4_kruskal.csv"
       dunn_stable: "processed/M4/stats/M4_旧随机_Attn_topk4_dunn.csv"
       rair_validation: "processed/M4/rair_analysis/rair_with_clusters_M4.csv"
@@ -108,6 +120,9 @@ versions:
     files:
       consensus_labels: "processed/M5/consensus_labels.csv"
       clinical_with_clusters: "processed/M5/merged_clinical_all.csv"
+      patient_clinical: "processed/M5/merged_clinical_all.csv"
+      cohort_table: "processed/M5/merged_clinical_all.csv"
+      merged_clinical: "processed/M5/merged_clinical_all.csv"
       kruskal_stable: "processed/M5/stats/M5_旧随机_Mean_topk6_kruskal.csv"
       dunn_stable: "processed/M5/stats/M5_旧随机_Mean_topk6_dunn.csv"
       rair_validation: "processed/M5/rair_analysis/rair_with_clusters_M5.csv"
