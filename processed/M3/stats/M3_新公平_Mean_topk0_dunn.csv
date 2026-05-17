@@ -1,0 +1,16 @@
+﻿指标,对比,p_adj,显著性,版本
+肛门括约肌静息压(mmHg),C0-C1,0.0,***,M3_新公平_Mean_topk0
+肛门括约肌静息压(mmHg),C0-C2,0.0,***,M3_新公平_Mean_topk0
+肛门括约肌静息压(mmHg),C1-C2,0.0,***,M3_新公平_Mean_topk0
+最大缩榨压MSP（mmHg）,C0-C1,0.0,***,M3_新公平_Mean_topk0
+最大缩榨压MSP（mmHg）,C0-C2,0.0,***,M3_新公平_Mean_topk0
+最大缩榨压MSP（mmHg）,C1-C2,0.0,***,M3_新公平_Mean_topk0
+肛门括约肌长度(cm),C0-C1,0.0,***,M3_新公平_Mean_topk0
+肛门括约肌长度(cm),C0-C2,0.0,***,M3_新公平_Mean_topk0
+肛门括约肌长度(cm),C1-C2,0.000939,***,M3_新公平_Mean_topk0
+排便时直肠压力(mmHg),C0-C1,0.0,***,M3_新公平_Mean_topk0
+排便时直肠压力(mmHg),C0-C2,0.002762,**,M3_新公平_Mean_topk0
+排便时直肠压力(mmHg),C1-C2,0.001525,**,M3_新公平_Mean_topk0
+排便窘迫感阈值(ml),C0-C1,0.044928,*,M3_新公平_Mean_topk0
+排便窘迫感阈值(ml),C0-C2,0.007375,**,M3_新公平_Mean_topk0
+排便窘迫感阈值(ml),C1-C2,0.374748,ns,M3_新公平_Mean_topk0

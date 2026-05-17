@@ -4,8 +4,8 @@ version_order:
   - "M1_新公平_Attn_topk4"
   - "M2_新公平_Attn_topk6"
   - "M3_新公平_Mean_all"
-  - "M4_旧随机_Mean_topk4"
-  - "M5_旧随机_Attn_topk6"
+  - "M4_旧随机_Attn_topk4"
+  - "M5_旧随机_Mean_topk6"
 
 versions:
   M1_新公平_Attn_topk4:
@@ -21,13 +21,13 @@ versions:
     n_clusters: 3
     boundary_threshold: 0.8
     files:
-      consensus_labels: "H:/windows/图像数据/dataProcess/outputs/fair_compare_multi_dim/attn/topk4/pca50/consensus_labels_all.csv"
-      clinical_with_clusters: "H:/windows/图像数据/dataProcess/outputs/fair_compare_multi_dim/attn/topk4/pca50/merged_clinical_all.csv"
-      kruskal_stable: "H:/windows/图像数据/dataProcess/processed/M1/stats/M1_新公平_Attn_topk4_kruskal.csv"
-      dunn_stable: "H:/windows/图像数据/dataProcess/processed/M1/stats/M1_新公平_Attn_topk4_dunn.csv"
-      rair_validation: "H:/windows/图像数据/dataProcess/processed/M1/rair_validation.csv"
-      rome_cross_table: "H:/windows/图像数据/dataProcess/processed/M1/rome_ai_cross_table.csv"
-      umap_figure: "H:/windows/图像数据/dataProcess/processed/M1/umap_consensus_clusters.png"
+      consensus_labels: "processed/M1/consensus_labels.csv"
+      clinical_with_clusters: "processed/M1/merged_clinical_all.csv"
+      kruskal_stable: "processed/M1/stats/M1_新公平_Attn_topk4_kruskal.csv"
+      dunn_stable: "processed/M1/stats/M1_新公平_Attn_topk4_dunn.csv"
+      rair_validation: ""
+      rome_cross_table: ""
+      umap_figure: "processed/M1/umap_consensus_clusters.png"
 
   M2_新公平_Attn_topk6:
     display_name: "M2 - 新公平 Attention K6"
@@ -42,13 +42,13 @@ versions:
     n_clusters: 3
     boundary_threshold: 0.8
     files:
-      consensus_labels: "H:/windows/图像数据/dataProcess/outputs/fair_compare_multi_dim/attn/topk6/pca50/consensus_labels_all.csv"
-      clinical_with_clusters: "H:/windows/图像数据/dataProcess/outputs/fair_compare_multi_dim/attn/topk6/pca50/merged_clinical_all.csv"
-      kruskal_stable: "H:/windows/图像数据/dataProcess/processed/M2/stats/M2_新公平_Attn_topk6_kruskal.csv"
-      dunn_stable: "H:/windows/图像数据/dataProcess/processed/M2/stats/M2_新公平_Attn_topk6_dunn.csv"
-      rair_validation: "H:/windows/图像数据/dataProcess/processed/M2/rair_validation.csv"
-      rome_cross_table: "H:/windows/图像数据/dataProcess/processed/M2/rome_ai_cross_table.csv"
-      umap_figure: "H:/windows/图像数据/dataProcess/processed/M2/umap_consensus_clusters.png"
+      consensus_labels: "processed/M2/consensus_labels.csv"
+      clinical_with_clusters: "processed/M2/merged_clinical_all.csv"
+      kruskal_stable: "processed/M2/stats/M2_新公平_Attn_topk6_kruskal.csv"
+      dunn_stable: "processed/M2/stats/M2_新公平_Attn_topk6_dunn.csv"
+      rair_validation: ""
+      rome_cross_table: ""
+      umap_figure: "processed/M2/umap_consensus_clusters.png"
 
   M3_新公平_Mean_all:
     display_name: "M3 - 新公平 Mean 全部帧"
@@ -64,52 +64,52 @@ versions:
     n_clusters: 3
     boundary_threshold: 0.8
     files:
-      consensus_labels: "H:/windows/图像数据/dataProcess/outputs/fair_compare_multi_dim/mean/topk0/pca50/consensus_labels_all.csv"
-      clinical_with_clusters: "H:/windows/图像数据/dataProcess/outputs/fair_compare_multi_dim/mean/topk0/pca50/merged_clinical_all.csv"
-      kruskal_stable: "H:/windows/图像数据/dataProcess/processed/M3/stats/M3_新公平_Mean_all_kruskal.csv"
-      dunn_stable: "H:/windows/图像数据/dataProcess/processed/M3/stats/M3_新公平_Mean_all_dunn.csv"
-      rair_validation: "H:/windows/图像数据/dataProcess/processed/M3/rair_validation.csv"
-      rome_cross_table: "H:/windows/图像数据/dataProcess/processed/M3/rome_ai_cross_table.csv"
-      umap_figure: "H:/windows/图像数据/dataProcess/processed/M3/umap_consensus_clusters.png"
+      consensus_labels: "processed/M3/consensus_labels.csv"
+      clinical_with_clusters: "processed/M3/merged_clinical_all.csv"
+      kruskal_stable: "processed/M3/stats/M3_新公平_Mean_topk0_kruskal.csv"
+      dunn_stable: "processed/M3/stats/M3_新公平_Mean_topk0_dunn.csv"
+      rair_validation: ""
+      rome_cross_table: ""
+      umap_figure: "processed/M3/umap_consensus_clusters.png"
 
-  M4_旧随机_Mean_topk4:
-    display_name: "M4 - 旧随机 Mean K4"
+  M4_旧随机_Attn_topk4:
+    display_name: "M4 - 旧随机 Attention K4"
     short_name: "M4"
     role: "ablation"
-    description: "旧方法对照版本：采用随机受限抽帧策略，基于 Mean Pooling，每个协议最多保留 4 帧。"
+    description: "旧方法对照版本：采用随机受限抽帧策略，基于 Attention Pooling，每个协议最多保留 4 帧。"
     sampling_strategy: "random_limited"
     sampling_name: "旧随机受限抽帧"
-    pooling: "mean"
-    method: "随机受限抽帧 + Mean Pooling + 最多4帧"
+    pooling: "attention"
+    method: "随机受限抽帧 + Attention Pooling + 最多4帧"
     top_k: 4
     n_clusters: 3
     boundary_threshold: 0.8
     files:
-      consensus_labels: "H:/windows/图像数据/dataProcess/rerun_outputs/mean/mapp4/consensus_labels_all.csv"
-      clinical_with_clusters: "H:/windows/图像数据/dataProcess/processed/M4/merged_clinical_all.csv"
-      kruskal_stable: "H:/windows/图像数据/dataProcess/processed/M4/stats/M4_旧随机_Mean_topk4_kruskal.csv"
-      dunn_stable: "H:/windows/图像数据/dataProcess/processed/M4/stats/M4_旧随机_Mean_topk4_dunn.csv"
-      rair_validation: "H:/windows/图像数据/dataProcess/processed/M4/rair_validation.csv"
-      rome_cross_table: "H:/windows/图像数据/dataProcess/processed/M4/rome_ai_cross_table.csv"
-      umap_figure: "H:/windows/图像数据/dataProcess/processed/M4/umap_consensus_clusters.png"
+      consensus_labels: "processed/M4/consensus_labels.csv"
+      clinical_with_clusters: "processed/M4/merged_clinical_all.csv"
+      kruskal_stable: "processed/M4/stats/M4_旧随机_Attn_topk4_kruskal.csv"
+      dunn_stable: "processed/M4/stats/M4_旧随机_Attn_topk4_dunn.csv"
+      rair_validation: ""
+      rome_cross_table: ""
+      umap_figure: "processed/M4/umap_consensus_clusters.png"
 
-  M5_旧随机_Attn_topk6:
-    display_name: "M5 - 旧随机 Attention K6"
+  M5_旧随机_Mean_topk6:
+    display_name: "M5 - 旧随机 Mean K6"
     short_name: "M5"
     role: "ablation"
-    description: "旧方法对照版本：采用随机受限抽帧策略，基于 Attention Pooling，每个协议最多保留 6 帧。"
+    description: "旧方法对照版本：采用随机受限抽帧策略，基于 Mean Pooling，每个协议最多保留 6 帧。"
     sampling_strategy: "random_limited"
     sampling_name: "旧随机受限抽帧"
-    pooling: "attention"
-    method: "随机受限抽帧 + Attention Pooling + 最多6帧"
+    pooling: "mean"
+    method: "随机受限抽帧 + Mean Pooling + 最多6帧"
     top_k: 6
     n_clusters: 3
     boundary_threshold: 0.8
     files:
-      consensus_labels: "H:/windows/图像数据/dataProcess/rerun_outputs_02468_pca50/attn/topk6/consensus_labels_all.csv"
-      clinical_with_clusters: "H:/windows/图像数据/dataProcess/processed/M5/merged_clinical_all.csv"
-      kruskal_stable: "H:/windows/图像数据/dataProcess/processed/M5/stats/M5_旧随机_Attn_topk6_kruskal.csv"
-      dunn_stable: "H:/windows/图像数据/dataProcess/processed/M5/stats/M5_旧随机_Attn_topk6_dunn.csv"
-      rair_validation: "H:/windows/图像数据/dataProcess/processed/M5/rair_validation.csv"
-      rome_cross_table: "H:/windows/图像数据/dataProcess/processed/M5/rome_ai_cross_table.csv"
-      umap_figure: "H:/windows/图像数据/dataProcess/processed/M5/umap_consensus_clusters.png"
+      consensus_labels: "processed/M5/consensus_labels.csv"
+      clinical_with_clusters: "processed/M5/merged_clinical_all.csv"
+      kruskal_stable: "processed/M5/stats/M5_旧随机_Mean_topk6_kruskal.csv"
+      dunn_stable: "processed/M5/stats/M5_旧随机_Mean_topk6_dunn.csv"
+      rair_validation: ""
+      rome_cross_table: ""
+      umap_figure: "processed/M5/umap_consensus_clusters.png"

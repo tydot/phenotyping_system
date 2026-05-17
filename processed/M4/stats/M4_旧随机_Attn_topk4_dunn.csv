@@ -1,0 +1,13 @@
+﻿指标,对比,p_adj,显著性,版本
+肛门括约肌静息压(mmHg),C0-C1,0.0,***,M4_旧随机_Attn_topk4
+肛门括约肌静息压(mmHg),C0-C2,0.0,***,M4_旧随机_Attn_topk4
+肛门括约肌静息压(mmHg),C1-C2,0.0,***,M4_旧随机_Attn_topk4
+最大缩榨压MSP（mmHg）,C0-C1,0.0,***,M4_旧随机_Attn_topk4
+最大缩榨压MSP（mmHg）,C0-C2,2e-06,***,M4_旧随机_Attn_topk4
+最大缩榨压MSP（mmHg）,C1-C2,0.0,***,M4_旧随机_Attn_topk4
+肛门括约肌长度(cm),C0-C1,0.0,***,M4_旧随机_Attn_topk4
+肛门括约肌长度(cm),C0-C2,0.014878,*,M4_旧随机_Attn_topk4
+肛门括约肌长度(cm),C1-C2,0.0,***,M4_旧随机_Attn_topk4
+排便时直肠压力(mmHg),C0-C1,0.000762,***,M4_旧随机_Attn_topk4
+排便时直肠压力(mmHg),C0-C2,0.007245,**,M4_旧随机_Attn_topk4
+排便时直肠压力(mmHg),C1-C2,0.0,***,M4_旧随机_Attn_topk4
