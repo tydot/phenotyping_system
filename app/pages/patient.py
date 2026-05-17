@@ -1572,10 +1572,31 @@ available_patient_ids = (
 
 default_patient_id = available_patient_ids[0] if available_patient_ids else ""
 
-patient_id = st.sidebar.text_input(
-    "患者编号（Patient ID）",
-    value=default_patient_id,
+selected_patient_id = st.sidebar.selectbox(
+    "选择患者（Patient ID）",
+    options=available_patient_ids,
+    index=0 if available_patient_ids else None,
+    key=f"patient_select_{selected_version}",
 )
+
+manual_patient_id = st.sidebar.text_input(
+    "或手动输入患者编号",
+    value=selected_patient_id if selected_patient_id else "",
+    key=f"patient_manual_{selected_version}",
+)
+
+patient_id = normalize_patient_id(manual_patient_id or selected_patient_id)
+
+if st.sidebar.button("刷新患者数据", key=f"refresh_patient_{selected_version}_{patient_id}"):
+    clear_patient_cache()
+    st.cache_data.clear()
+    st.rerun()
+
+default_image_root = os.environ.get(
+    "PREPROCESSED_FEATURES_DIR",
+    str(ROOT_DIR / "preprocessed_features"),
+)
+
 
 default_image_root = os.environ.get(
     "PREPROCESSED_FEATURES_DIR",
@@ -1624,17 +1645,37 @@ if not can_view_patient(user, patient_id):
 # -----------------------------
 patient = load_patient_view(patient_id) or {}
 
-ai = safe_dict(patient.get("ai_result"))
-phys = safe_dict(patient.get("physiology"))
-representation = safe_dict(patient.get("representation"))
-rair = safe_dict(patient.get("rair"))
-stab = safe_dict(patient.get("stability"))
-rome = safe_dict(patient.get("rome_iv"))
-group_stats = safe_dict(patient.get("group_statistics"))
-llm_analysis = safe_dict(patient.get("llm_analysis"))
-rag = safe_dict(patient.get("rag"))
-rag_recommendations = safe_list(patient.get("rag_recommendations"))
-gender_meta = safe_dict(patient.get("gender_meta"))
+# ============================================================
+# 后端固定结果：KG / RAG / LLM / VLM / RAIR / Rome / representation
+# 这些不随 M1-M5 版本切换变化
+# ============================================================
+
+backend_ai = safe_dict(patient.get("ai_result"))
+backend_phys = safe_dict(patient.get("physiology"))
+backend_representation = safe_dict(patient.get("representation"))
+backend_rair = safe_dict(patient.get("rair"))
+backend_stab = safe_dict(patient.get("stability"))
+backend_rome = safe_dict(patient.get("rome_iv"))
+backend_group_stats = safe_dict(patient.get("group_statistics"))
+backend_llm_analysis = safe_dict(patient.get("llm_analysis"))
+backend_rag = safe_dict(patient.get("rag"))
+backend_rag_recommendations = safe_list(patient.get("rag_recommendations"))
+backend_gender_meta = safe_dict(patient.get("gender_meta"))
+
+# 页面上方 AI 分型允许被当前版本覆盖
+ai = dict(backend_ai)
+stab = dict(backend_stab)
+group_stats = dict(backend_group_stats)
+
+# 下游解释模块固定走后端
+phys = backend_phys
+representation = backend_representation
+rair = backend_rair
+rome = backend_rome
+llm_analysis = backend_llm_analysis
+rag = backend_rag
+rag_recommendations = backend_rag_recommendations
+gender_meta = backend_gender_meta
 
 # ============================================================
 # 当前 M1-M5 版本结果覆盖
@@ -1818,16 +1859,22 @@ else:
 # 必须放在 LLM 生成之前，这样结果才能进入 llm_context
 # ============================================================
 
-raw_row_for_vlm = {}
-if version_patient_result and isinstance(version_patient_result.get("raw_row"), dict):
-    raw_row_for_vlm = version_patient_result.get("raw_row", {})
+# ============================================================
+# VLM 固定走后端，不随 M1-M5 版本变化
+# ============================================================
 
-protocol_topk_details_for_vlm = safe_list(representation.get("protocol_topk_details"))
+raw_row_for_vlm = safe_dict(patient.get("raw_row"))
+if not raw_row_for_vlm:
+    raw_row_for_vlm = safe_dict(patient)
+
+protocol_topk_details_for_vlm = safe_list(
+    backend_representation.get("protocol_topk_details")
+)
 
 image_paths_for_vlm = resolve_patient_image_paths_by_protocol(
     patient=patient,
     raw_row=raw_row_for_vlm,
-    representation=representation,
+    representation=backend_representation,
     protocol_topk_details=protocol_topk_details_for_vlm,
     image_root_dir=image_root_input,
 )
@@ -2114,15 +2161,30 @@ if GRAPH_FEATURE_AVAILABLE:
     except Exception:
         kg_paths_for_llm = []
 
+# ============================================================
+# LLM 固定走后端，不随 M1-M5 版本变化
+# ============================================================
+
+backend_metric_judgements = safe_list(
+    patient.get("metric_judgements")
+    or patient.get("metric_judgments")
+    or []
+)
+
+backend_feature_states = safe_list(
+    patient.get("feature_states")
+    or []
+)
+
 llm_context = build_llm_context(
     patient_id=patient_id,
-    ai=ai,
-    stability=stab,
-    metric_judgements=metric_judgements,
-    feature_states=feature_states,
-    rair=rair,
-    rome=rome,
-    rag=rag,
+    ai=backend_ai,
+    stability=backend_stab,
+    metric_judgements=backend_metric_judgements,
+    feature_states=backend_feature_states,
+    rair=backend_rair,
+    rome=backend_rome,
+    rag=backend_rag,
     kg_paths=kg_paths_for_llm,
 )
 
