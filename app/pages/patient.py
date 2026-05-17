@@ -267,6 +267,66 @@ def safe_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
+def add_unique_id(candidates: List[str], value: Any):
+    value = normalize_patient_id(value)
+    if value and value not in candidates:
+        candidates.append(value)
+
+
+def load_backend_patient_with_fallback(
+    input_patient_id: str,
+    patient_row: pd.Series,
+):
+    """
+    后端 KG / RAG / LLM / VLM / RAIR / Rome 使用的患者对象。
+    因为当前版本 CSV 里的 patient_id / pid_key 可能和后端患者库主键不同，
+    所以这里尝试多个候选 ID。
+    """
+    candidates: List[str] = []
+
+    add_unique_id(candidates, input_patient_id)
+
+    if patient_row is not None:
+        for key in [
+            "patient_id",
+            "pid_key",
+            "pid",
+            "PID",
+            "PatientID",
+            "Patient_ID",
+            "病例号",
+            "患者编号",
+            "患者ID",
+            "id",
+        ]:
+            if key in patient_row.index:
+                add_unique_id(candidates, patient_row.get(key))
+
+    debug_rows = []
+
+    for candidate_id in candidates:
+        backend_patient = load_patient_view(candidate_id) or {}
+
+        if isinstance(backend_patient, dict):
+            keys = list(backend_patient.keys())
+        else:
+            keys = []
+
+        debug_rows.append(
+            {
+                "候选后端ID": candidate_id,
+                "是否读到后端患者对象": bool(keys),
+                "后端字段预览": ", ".join(keys[:12]) if keys else "-",
+            }
+        )
+
+        if keys:
+            return candidate_id, backend_patient, debug_rows
+
+    fallback_id = candidates[0] if candidates else input_patient_id
+    return fallback_id, {}, debug_rows
+
+
 def fmt_number(x, digits: int = 2):
     if x is None or x == "":
         return "-"
@@ -1570,33 +1630,32 @@ available_patient_ids = (
     .tolist()
 )
 
-default_patient_id = available_patient_ids[0] if available_patient_ids else ""
-
-selected_patient_id = st.sidebar.selectbox(
-    "选择患者（Patient ID）",
-    options=available_patient_ids,
-    index=0 if available_patient_ids else None,
-    key=f"patient_select_{selected_version}",
-)
+if "active_patient_id" not in st.session_state:
+    st.session_state["active_patient_id"] = ""
 
 manual_patient_id = st.sidebar.text_input(
-    "或手动输入患者编号",
-    value=selected_patient_id if selected_patient_id else "",
-    key=f"patient_manual_{selected_version}",
+    "手动输入患者编号",
+    value=st.session_state.get("active_patient_id", ""),
+    placeholder="例如：190022372 或 210259070",
+    key=f"patient_manual_input_{selected_version}",
 )
 
-patient_id = normalize_patient_id(manual_patient_id or selected_patient_id)
+if st.sidebar.button("确定加载患者", key=f"confirm_patient_{selected_version}"):
+    st.session_state["active_patient_id"] = normalize_patient_id(manual_patient_id)
+    clear_patient_cache()
+    st.cache_data.clear()
+    st.rerun()
+
+patient_id = normalize_patient_id(st.session_state.get("active_patient_id", ""))
+
+if not patient_id:
+    st.info("请在左侧输入患者编号，并点击「确定加载患者」。")
+    st.stop()
 
 if st.sidebar.button("刷新患者数据", key=f"refresh_patient_{selected_version}_{patient_id}"):
     clear_patient_cache()
     st.cache_data.clear()
     st.rerun()
-
-default_image_root = os.environ.get(
-    "PREPROCESSED_FEATURES_DIR",
-    str(ROOT_DIR / "preprocessed_features"),
-)
-
 
 default_image_root = os.environ.get(
     "PREPROCESSED_FEATURES_DIR",
@@ -1643,7 +1702,24 @@ if not can_view_patient(user, patient_id):
 # -----------------------------
 # Load additional patient data from backend
 # -----------------------------
-patient = load_patient_view(patient_id) or {}
+backend_patient_id, patient, backend_patient_debug = load_backend_patient_with_fallback(
+    input_patient_id=patient_id,
+    patient_row=patient_row,
+)
+
+with st.expander("调试：查看后端患者数据读取情况"):
+    st.write("页面输入患者 ID：", patient_id)
+    st.write("后端实际使用患者 ID：", backend_patient_id)
+    st.write("后端患者对象是否为空：", not bool(patient))
+    st.dataframe(
+        pd.DataFrame(backend_patient_debug),
+        use_container_width=True,
+        hide_index=True,
+    )
+    if isinstance(patient, dict):
+        st.write("后端患者字段：", list(patient.keys()))
+
+
 
 # ============================================================
 # 后端固定结果：KG / RAG / LLM / VLM / RAIR / Rome / representation
@@ -1766,7 +1842,20 @@ else:
 
 st.caption("稳定性置信度反映多随机种子无监督聚类结果的一致性，并不等同于临床诊断置信度。")
 
-effective_gender_info = resolve_gender_display(patient, gender_meta)
+gender_patient_for_display = dict(patient) if isinstance(patient, dict) else {}
+
+raw_row_for_gender = {}
+if version_patient_result and isinstance(version_patient_result.get("raw_row"), dict):
+    raw_row_for_gender = version_patient_result.get("raw_row", {})
+
+if not gender_patient_for_display.get("gender") and not gender_patient_for_display.get("sex"):
+    for gender_key in ["性别", "gender", "sex"]:
+        gender_value = raw_row_for_gender.get(gender_key)
+        if gender_value is not None and str(gender_value).strip() not in ["", "nan", "None", "-"]:
+            gender_patient_for_display["gender"] = gender_value
+            break
+
+effective_gender_info = resolve_gender_display(gender_patient_for_display, gender_meta)
 resolved_gender = effective_gender_info.get("resolved_gender", "-")
 gender_source = effective_gender_info.get("source", "-")
 gender_is_defaulted = bool(effective_gender_info.get("is_defaulted", False))
@@ -1904,10 +1993,10 @@ if image_paths_for_vlm:
                 continue
 
             one_findings = generate_region_findings(
-                patient_id=str(patient_id),
-                image_path=one_image_path,
-                output_dir=str(ROOT_DIR / "outputs" / "vlm_region_crops"),
-            )
+                    patient_id=str(backend_patient_id),
+                    image_path=one_image_path,
+                    output_dir=str(ROOT_DIR / "outputs" / "vlm_region_crops"),
+                )
 
             for finding in safe_list(one_findings):
                 finding = safe_dict(finding)
@@ -2156,7 +2245,7 @@ kg_paths_for_llm = []
 
 if GRAPH_FEATURE_AVAILABLE:
     try:
-        kg_for_llm = load_patient_graph(patient_id)
+        kg_for_llm = load_patient_graph(backend_patient_id)
         kg_paths_for_llm = safe_list(kg_for_llm.get("paths"))
     except Exception:
         kg_paths_for_llm = []
@@ -2177,7 +2266,7 @@ backend_feature_states = safe_list(
 )
 
 llm_context = build_llm_context(
-    patient_id=patient_id,
+    patient_id=backend_patient_id,
     ai=backend_ai,
     stability=backend_stab,
     metric_judgements=backend_metric_judgements,
@@ -2265,14 +2354,14 @@ else:
     graph_error = None
     if refresh_graph_btn:
         with st.spinner("正在构建知识图谱..."):
-            graph_error = sync_patient_graph(patient_id, patient)
+            graph_error = sync_patient_graph(backend_patient_id, patient)
         if graph_error:
             st.error(f"知识图谱更新失败：{graph_error}")
         else:
             st.success("知识图谱已更新。")
 
     try:
-        kg = load_patient_graph(patient_id)
+        kg = load_patient_graph(backend_patient_id)
     except Exception as e:
         kg = {"nodes": [], "edges": [], "paths": []}
         st.caption(f"知识图谱暂不可用：{e}")
