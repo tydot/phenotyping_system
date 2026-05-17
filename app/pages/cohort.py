@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 from PIL import Image
+
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -8,10 +9,158 @@ if str(ROOT_DIR) not in sys.path:
 import pandas as pd
 import streamlit as st
 
-from backend.api.cohort import get_cohort_view
 from backend.auth.auth_service import require_role
-from backend.version_manager import select_version_sidebar, resolve_path
+from backend.version_manager import (
+    select_version_sidebar,
+    safe_read_csv,
+    resolve_path,
+)
 
+
+def find_first_existing_col(df: pd.DataFrame, candidates):
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def normalize_patient_id(x):
+    if pd.isna(x):
+        return ""
+    s = str(x).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
+
+def load_current_version_clinical(current_files):
+    """
+    cohort / patient 页面统一读取当前版本患者联合表。
+    优先级：
+    patient_clinical → cohort_table → merged_clinical → clinical_with_clusters
+    """
+    clinical_path_raw = (
+        current_files.get("patient_clinical")
+        or current_files.get("cohort_table")
+        or current_files.get("merged_clinical")
+        or current_files.get("clinical_with_clusters")
+    )
+
+    clinical_path = resolve_path(clinical_path_raw)
+    clinical_df = safe_read_csv(clinical_path)
+
+    return clinical_path_raw, clinical_path, clinical_df
+
+
+def normalize_cohort_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    df = df.copy()
+
+    patient_col = find_first_existing_col(
+        df,
+        [
+            "patient_id",
+            "pid_key",
+            "pid",
+            "PID",
+            "PatientID",
+            "Patient_ID",
+            "病例号",
+            "患者编号",
+            "患者ID",
+            "id",
+        ],
+    )
+
+    cluster_col = find_first_existing_col(
+        df,
+        [
+            "consensus_cluster",
+            "cluster",
+            "Cluster",
+            "final_cluster",
+            "label",
+            "consensus_label",
+            "共识簇",
+            "AI分型",
+        ],
+    )
+
+    confidence_col = find_first_existing_col(
+        df,
+        [
+            "confidence",
+            "Confidence",
+            "consensus_confidence",
+            "vote_confidence",
+            "stability_confidence",
+            "置信度",
+            "稳定性置信度",
+        ],
+    )
+
+    boundary_col = find_first_existing_col(
+        df,
+        [
+            "is_boundary",
+            "boundary",
+            "Is_Boundary",
+            "边界患者",
+            "是否边界",
+        ],
+    )
+
+    rename_map = {}
+
+    if patient_col:
+        rename_map[patient_col] = "patient_id"
+    if cluster_col:
+        rename_map[cluster_col] = "consensus_cluster"
+    if confidence_col:
+        rename_map[confidence_col] = "confidence"
+    if boundary_col:
+        rename_map[boundary_col] = "is_boundary"
+
+    df = df.rename(columns=rename_map)
+
+    if "patient_id" not in df.columns:
+        df["patient_id"] = df.index.astype(str)
+
+    df["patient_id"] = df["patient_id"].apply(normalize_patient_id)
+
+    if "consensus_cluster" not in df.columns:
+        df["consensus_cluster"] = pd.NA
+
+    if "confidence" in df.columns:
+        df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce")
+    else:
+        df["confidence"] = pd.NA
+
+    if "is_boundary" in df.columns:
+        def normalize_bool(x):
+            if pd.isna(x):
+                return pd.NA
+            if isinstance(x, bool):
+                return x
+            s = str(x).strip().lower()
+            if s in ["true", "1", "yes", "y", "是", "边界", "boundary"]:
+                return True
+            if s in ["false", "0", "no", "n", "否", "稳定", "stable"]:
+                return False
+            return pd.NA
+
+        df["is_boundary"] = df["is_boundary"].apply(normalize_bool)
+    else:
+        if "confidence" in df.columns and df["confidence"].notna().any():
+            df["is_boundary"] = df["confidence"].apply(
+                lambda x: bool(pd.notna(x) and float(x) < 0.8)
+            )
+        else:
+            df["is_boundary"] = pd.NA
+
+    return df
 
 st.set_page_config(page_title="Cohort Overview", layout="wide")
 
@@ -34,15 +183,6 @@ selected_version, current_version, current_files = select_version_sidebar(
 
 
 # ============================================================
-# 数据加载
-# ============================================================
-
-@st.cache_data(show_spinner=False)
-def load_cohort_view():
-    return get_cohort_view()
-
-
-# ============================================================
 # 页面标题
 # ============================================================
 
@@ -56,46 +196,63 @@ st.info(
     f"方法配置：**{current_version.get('method', '-')}**"
 )
 
+clinical_path_raw, clinical_path, clinical_df_raw = load_current_version_clinical(current_files)
+cohort_df = normalize_cohort_df(clinical_df_raw)
+
+with st.expander("调试：查看 cohort 数据路径"):
+    st.write("clinical 原始路径：", clinical_path_raw)
+    st.write("clinical 解析路径：", str(clinical_path) if clinical_path else None)
+    st.write("文件是否存在：", clinical_path.exists() if clinical_path else False)
+    st.write("是否读取成功：", cohort_df is not None and not cohort_df.empty)
+
+    if clinical_df_raw is not None and not clinical_df_raw.empty:
+        st.write("原始列名：", list(clinical_df_raw.columns))
+        st.write("前 5 行：")
+        st.dataframe(clinical_df_raw.head(), use_container_width=True)
+
+    if cohort_df is not None and not cohort_df.empty:
+        st.write("标准化后列名：", list(cohort_df.columns))
+        st.write("前 20 个患者 ID：", cohort_df["patient_id"].head(20).tolist())
+
+if cohort_df is None or cohort_df.empty:
+    st.error("当前版本未读取到患者联合表。请检查 versions.yaml 中 patient_clinical / cohort_table / merged_clinical / clinical_with_clusters 路径。")
+    st.stop()
+
 if st.button("刷新队列结果"):
-    load_cohort_view.clear()
+    st.cache_data.clear()
     st.rerun()
-
-
-# ============================================================
-# Cohort 数据
-# ============================================================
-
-data = load_cohort_view() or {}
-overview = data.get("overview", {})
-field_coverage = data.get("clinical_field_coverage", [])
-clinical_summary = data.get("clinical_summary", [])
-summary_text = data.get("summary_text", "暂无系统摘要。")
 
 
 # ============================================================
 # 队列概览
 # ============================================================
 
+total_n = int(cohort_df["patient_id"].nunique())
+
+if "is_boundary" in cohort_df.columns and cohort_df["is_boundary"].notna().any():
+    boundary_n = int(cohort_df["is_boundary"].fillna(False).astype(bool).sum())
+    stable_n = int(total_n - boundary_n)
+    stable_ratio = stable_n / total_n if total_n > 0 else 0
+else:
+    boundary_n = 0
+    stable_n = 0
+    stable_ratio = None
+
 st.subheader("队列概览")
 
 c1, c2, c3, c4 = st.columns(4)
 
 with c1:
-    st.metric("患者总数", overview.get("n_patients", 0))
+    st.metric("患者总数", total_n)
 
 with c2:
-    st.metric("稳定患者数", overview.get("n_stable", 0))
+    st.metric("稳定患者数", stable_n if stable_ratio is not None else "-")
 
 with c3:
-    st.metric("边界患者数", overview.get("n_boundary", 0))
+    st.metric("边界患者数", boundary_n if stable_ratio is not None else "-")
 
 with c4:
-    stable_ratio = overview.get("stable_ratio")
-    try:
-        stable_ratio = f"{float(stable_ratio):.1%}"
-    except Exception:
-        stable_ratio = "-"
-    st.metric("稳定患者比例", stable_ratio)
+    st.metric("稳定患者比例", f"{stable_ratio:.1%}" if stable_ratio is not None else "-")
 
 st.divider()
 
@@ -106,22 +263,20 @@ st.divider()
 
 st.subheader("Cluster 分布")
 
-cluster_df = pd.DataFrame(overview.get("cluster_dist", []))
-
-if cluster_df.empty:
+if "consensus_cluster" not in cohort_df.columns or cohort_df["consensus_cluster"].dropna().empty:
     st.warning("暂无 cluster 分布数据。")
 else:
-    cluster_df = cluster_df.rename(
-        columns={
-            "consensus_cluster": "Cluster",
-            "n": "患者数",
-        }
+    cluster_count = (
+        cohort_df["consensus_cluster"]
+        .dropna()
+        .value_counts()
+        .sort_index()
+        .rename_axis("Cluster")
+        .reset_index(name="患者数")
     )
 
-    st.dataframe(cluster_df, use_container_width=True, hide_index=True)
-
-    if "Cluster" in cluster_df.columns and "患者数" in cluster_df.columns:
-        st.bar_chart(cluster_df.set_index("Cluster"))
+    st.bar_chart(cluster_count.set_index("Cluster"))
+    st.dataframe(cluster_count, use_container_width=True, hide_index=True)
 
 st.divider()
 
@@ -158,82 +313,5 @@ if IMG_PATH and IMG_PATH.exists():
 else:
     st.warning(f"未找到当前版本的 UMAP 图片文件：{IMG_PATH}")
 
-
-# ============================================================
-# 临床字段完整度
-# ============================================================
-
-st.subheader("临床字段完整度")
-
-coverage_df = pd.DataFrame(field_coverage)
-
-if coverage_df.empty:
-    st.warning("暂无字段完整度数据。")
-else:
-    coverage_df_show = coverage_df.copy()
-
-    if "coverage_rate" in coverage_df_show.columns:
-        coverage_df_show["coverage_rate"] = coverage_df_show["coverage_rate"].map(
-            lambda x: f"{x:.1%}" if pd.notnull(x) else "-"
-        )
-
-    coverage_df_show = coverage_df_show.rename(
-        columns={
-            "label": "字段名称",
-            "field": "字段编码",
-            "n_valid": "非空例数",
-            "coverage_rate": "覆盖率",
-        }
-    )
-
-    st.dataframe(coverage_df_show, use_container_width=True, hide_index=True)
-
-st.divider()
-
-
-# ============================================================
-# 关键临床指标概览
-# ============================================================
-
-st.subheader("关键临床指标概览")
-
-summary_df = pd.DataFrame(clinical_summary)
-
-if summary_df.empty:
-    st.warning("暂无关键指标概览数据。")
-else:
-    summary_df_show = summary_df.copy()
-
-    for col in ["mean_value", "min_value", "max_value"]:
-        if col in summary_df_show.columns:
-            summary_df_show[col] = summary_df_show[col].apply(
-                lambda x: round(x, 2) if pd.notnull(x) else None
-            )
-
-    summary_df_show = summary_df_show.rename(
-        columns={
-            "label": "指标名称",
-            "field": "字段编码",
-            "n_valid": "非空例数",
-            "mean_value": "均值",
-            "min_value": "最小值",
-            "max_value": "最大值",
-        }
-    )
-
-    st.dataframe(summary_df_show, use_container_width=True, hide_index=True)
-
-st.divider()
-
-
-# ============================================================
-# 系统摘要
-# ============================================================
-
-st.subheader("系统摘要")
-st.info(summary_text)
-
-with st.expander("调试：查看原始 Cohort 输出"):
-    st.json(data)
 
 st.caption("⚠️ 本页面用于总体队列科研分析，不用于临床诊断或治疗决策。")

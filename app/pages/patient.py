@@ -64,6 +64,159 @@ from backend.report.feature_state_extractor import (
 )
 from backend.report.llm_report import build_llm_context
 from backend.report.llm_client import generate_llm_report, get_llm_runtime_status
+from pathlib import Path
+import pandas as pd
+import streamlit as st
+
+from backend.version_manager import (
+    select_version_sidebar,
+    safe_read_csv,
+    resolve_path,
+)
+
+
+def find_first_existing_col(df: pd.DataFrame, candidates):
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def normalize_patient_id(x):
+    if pd.isna(x):
+        return ""
+    s = str(x).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    return s
+
+
+def load_current_version_clinical(current_files):
+    """
+    patient 页面统一读取当前版本患者联合表。
+    优先级：
+    patient_clinical → cohort_table → merged_clinical → clinical_with_clusters
+    """
+    clinical_path_raw = (
+        current_files.get("patient_clinical")
+        or current_files.get("cohort_table")
+        or current_files.get("merged_clinical")
+        or current_files.get("clinical_with_clusters")
+    )
+
+    clinical_path = resolve_path(clinical_path_raw)
+    clinical_df = safe_read_csv(clinical_path)
+
+    return clinical_path_raw, clinical_path, clinical_df
+
+
+def normalize_patient_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    df = df.copy()
+
+    patient_col = find_first_existing_col(
+        df,
+        [
+            "patient_id",
+            "pid_key",
+            "pid",
+            "PID",
+            "PatientID",
+            "Patient_ID",
+            "病例号",
+            "患者编号",
+            "患者ID",
+            "id",
+        ],
+    )
+
+    cluster_col = find_first_existing_col(
+        df,
+        [
+            "consensus_cluster",
+            "cluster",
+            "Cluster",
+            "final_cluster",
+            "label",
+            "consensus_label",
+            "共识簇",
+            "AI分型",
+        ],
+    )
+
+    confidence_col = find_first_existing_col(
+        df,
+        [
+            "confidence",
+            "Confidence",
+            "consensus_confidence",
+            "vote_confidence",
+            "stability_confidence",
+            "置信度",
+            "稳定性置信度",
+        ],
+    )
+
+    boundary_col = find_first_existing_col(
+        df,
+        [
+            "is_boundary",
+            "boundary",
+            "Is_Boundary",
+            "边界患者",
+            "是否边界",
+        ],
+    )
+
+    rename_map = {}
+
+    if patient_col:
+        rename_map[patient_col] = "patient_id"
+    if cluster_col:
+        rename_map[cluster_col] = "consensus_cluster"
+    if confidence_col:
+        rename_map[confidence_col] = "confidence"
+    if boundary_col:
+        rename_map[boundary_col] = "is_boundary"
+
+    df = df.rename(columns=rename_map)
+
+    if "patient_id" not in df.columns:
+        df["patient_id"] = df.index.astype(str)
+
+    df["patient_id"] = df["patient_id"].apply(normalize_patient_id)
+
+    if "consensus_cluster" not in df.columns:
+        df["consensus_cluster"] = pd.NA
+
+    if "confidence" in df.columns:
+        df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce")
+    else:
+        df["confidence"] = pd.NA
+
+    if "is_boundary" not in df.columns:
+        if "confidence" in df.columns and df["confidence"].notna().any():
+            df["is_boundary"] = df["confidence"].apply(
+                lambda x: bool(pd.notna(x) and float(x) < 0.8)
+            )
+        else:
+            df["is_boundary"] = pd.NA
+
+    return df
+
+
+def find_patient_row(df: pd.DataFrame, patient_id: str) -> pd.DataFrame:
+    if df is None or df.empty or "patient_id" not in df.columns:
+        return pd.DataFrame()
+
+    target = normalize_patient_id(patient_id)
+
+    matched = df[df["patient_id"].apply(normalize_patient_id) == target]
+
+    return matched
+
 
 # -----------------------------
 # Knowledge Graph / Pyvis imports
@@ -140,8 +293,22 @@ def show_metric_table(data: Dict[str, Any], digits: int = 2, empty_text: str = "
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
-def normalize_patient_id(raw_value: str) -> str:
-    return (raw_value or "").strip()
+def normalize_patient_id(raw_value: Any) -> str:
+    if raw_value is None:
+        return ""
+
+    try:
+        if pd.isna(raw_value):
+            return ""
+    except Exception:
+        pass
+
+    s = str(raw_value).strip()
+
+    if s.endswith(".0"):
+        s = s[:-2]
+
+    return s
 
 
 def normalize_id_for_match(value: Any) -> str:
@@ -161,13 +328,6 @@ def normalize_id_for_match(value: Any) -> str:
     if s.endswith(".0"):
         s = s[:-2]
     return s
-
-
-def find_first_existing_col(df: pd.DataFrame, candidates):
-    for col in candidates:
-        if col in df.columns:
-            return col
-    return None
 
 
 def normalize_bool_value(x):
@@ -297,8 +457,20 @@ def get_patient_version_row(
 
     short_name = current_version.get("short_name", "")
     consensus_file = current_files.get("consensus_labels")
-    clinical_file = current_files.get("clinical_with_clusters")
-    merged_file = current_files.get("merged_clinical_all")
+
+    clinical_file = (
+        current_files.get("clinical_with_clusters")
+        or current_files.get("merged_clinical")
+        or current_files.get("patient_clinical")
+        or current_files.get("cohort_table")
+    )
+
+    merged_file = (
+        current_files.get("merged_clinical")
+        or current_files.get("patient_clinical")
+        or current_files.get("cohort_table")
+    )
+
     inferred_merged_file = infer_merged_path_from_consensus(consensus_file)
 
     clinical_candidate_files = [
@@ -306,11 +478,6 @@ def get_patient_version_row(
         merged_file,
         inferred_merged_file,
     ]
-
-    if short_name:
-        clinical_candidate_files.append(
-            f"H:/windows/图像数据/dataProcess/processed/{short_name}/merged_clinical_all.csv"
-        )
 
     label_candidate_files = [
         consensus_file,
@@ -1361,44 +1528,85 @@ selected_version, current_version, current_files = select_version_sidebar(
 )
 
 st.info(
-    f"当前患者页版本：**{current_version.get('display_name', selected_version)}**  \n"
+    f"当前表型版本：**{current_version.get('display_name', selected_version)}**  \n"
     f"方法配置：**{current_version.get('method', '-')}**"
 )
+
+clinical_path_raw, clinical_path, patient_df_raw = load_current_version_clinical(current_files)
+patient_df = normalize_patient_df(patient_df_raw)
+
+with st.expander("调试：查看 patient 数据路径"):
+    st.write("clinical 原始路径：", clinical_path_raw)
+    st.write("clinical 解析路径：", str(clinical_path) if clinical_path else None)
+    st.write("文件是否存在：", clinical_path.exists() if clinical_path else False)
+    st.write("是否读取成功：", patient_df is not None and not patient_df.empty)
+
+    if patient_df_raw is not None and not patient_df_raw.empty:
+        st.write("原始列名：", list(patient_df_raw.columns))
+        st.write("前 5 行：")
+        st.dataframe(patient_df_raw.head(), use_container_width=True)
+
+    if patient_df is not None and not patient_df.empty:
+        st.write("标准化后列名：", list(patient_df.columns))
+        st.write("前 30 个患者 ID：", patient_df["patient_id"].head(30).tolist())
+
+if patient_df is None or patient_df.empty:
+    st.error("当前版本未读取到患者联合表。请检查 versions.yaml 中 patient_clinical / cohort_table / merged_clinical / clinical_with_clusters 路径。")
+    st.stop()
 
 # -----------------------------
 # Sidebar
 # -----------------------------
 st.sidebar.header("患者选择")
-patient_id_input = st.sidebar.text_input(
-    "患者编号（Patient ID）",
-    value="",
-    placeholder="请输入真实患者编号，例如：210259070",
+
+available_patient_ids = (
+    patient_df["patient_id"]
+    .dropna()
+    .astype(str)
+    .map(normalize_patient_id)
+    .loc[lambda s: s != ""]
+    .drop_duplicates()
+    .sort_values()
+    .tolist()
 )
+
+default_patient_id = available_patient_ids[0] if available_patient_ids else ""
+
+patient_id = st.sidebar.text_input(
+    "患者编号（Patient ID）",
+    value=default_patient_id,
+)
+
+default_image_root = os.environ.get(
+    "PREPROCESSED_FEATURES_DIR",
+    str(ROOT_DIR / "preprocessed_features"),
+)
+
 image_root_input = st.sidebar.text_input(
     "ARM 预处理图像文件夹",
-    value=r"H:\windows\图像数据\dataProcess\preprocessed_features",
-    placeholder=r"例如：H:\windows\图像数据\dataProcess\preprocessed_features",
+    value=default_image_root,
+    placeholder="例如：preprocessed_features 或 /mount/src/phenotyping_system/preprocessed_features",
 )
 
-patient_id = normalize_patient_id(patient_id_input)
+patient_row_df = find_patient_row(patient_df, patient_id)
 
-cbtn1, cbtn2 = st.sidebar.columns(2)
-with cbtn1:
-    load_btn = st.button("加载患者", use_container_width=True)
-with cbtn2:
-    refresh_btn = st.button("刷新缓存", use_container_width=True)
+if patient_row_df.empty:
+    st.error("未找到该患者，或当前版本未返回有效数据。")
 
-if refresh_btn:
-    clear_patient_cache()
-    st.sidebar.success("缓存已刷新。")
+    st.warning(
+        "请确认左侧输入的患者编号存在于当前版本的 merged_clinical_all.csv 中。"
+    )
 
-if not load_btn and not patient_id:
-    st.info("请输入患者编号并点击“加载患者”。")
+    st.write("当前版本可用患者编号示例：")
+    st.dataframe(
+        pd.DataFrame({"patient_id": available_patient_ids[:100]}),
+        use_container_width=True,
+        hide_index=True,
+    )
+
     st.stop()
 
-if not patient_id:
-    st.warning("患者编号不能为空。")
-    st.stop()
+patient_row = patient_row_df.iloc[0]
 
 # -----------------------------
 # Auth / Permission
@@ -1412,12 +1620,9 @@ if not can_view_patient(user, patient_id):
     st.stop()
 
 # -----------------------------
-# Load data
+# Load additional patient data from backend
 # -----------------------------
-patient = load_patient_view(patient_id)
-if not patient:
-    st.error("未找到该患者，或后端尚未返回有效数据。")
-    st.stop()
+patient = load_patient_view(patient_id) or {}
 
 ai = safe_dict(patient.get("ai_result"))
 phys = safe_dict(patient.get("physiology"))
