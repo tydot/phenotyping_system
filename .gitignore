@@ -29,6 +29,7 @@ data/users.db
 data/raw/
 data/processed/
 data/results/
+preprocessed_features/
 
 # Outputs
 outputs/
