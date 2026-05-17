@@ -53,4 +53,5 @@ Thumbs.db
 
 # Environment
 .env
-.env.*
+.env.**.tar.gz
+*.tar.gz
