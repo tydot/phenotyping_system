@@ -1706,7 +1706,31 @@ backend_patient_id, patient, backend_patient_debug = load_backend_patient_with_f
     input_patient_id=patient_id,
     patient_row=patient_row,
 )
+import inspect
 
+with st.expander("调试：云端 get_patient_view 数据源"):
+    st.write("ROOT_DIR:", str(ROOT_DIR))
+    st.write("cwd:", os.getcwd())
+    st.write("backend_patient_id:", backend_patient_id)
+    st.write("patient 是否为空:", not bool(patient))
+    st.write("patient keys:", list(patient.keys()) if isinstance(patient, dict) else type(patient))
+
+    st.write("get_patient_view 所在文件:", inspect.getfile(get_patient_view))
+
+    st.markdown("**候选后端 ID 读取情况**")
+    st.dataframe(pd.DataFrame(backend_patient_debug), use_container_width=True, hide_index=True)
+
+    for rel in [
+        "data",
+        "outputs",
+        "backend",
+        "knowledge_base",
+        "preprocessed_features",
+    ]:
+        p = ROOT_DIR / rel
+        st.write(f"{rel} exists:", p.exists(), str(p))
+        if p.exists() and p.is_dir():
+            st.write(f"{rel} 前20个文件:", [str(x.relative_to(ROOT_DIR)) for x in list(p.rglob("*"))[:20]])
 with st.expander("调试：查看后端患者数据读取情况"):
     st.write("页面输入患者 ID：", patient_id)
     st.write("后端实际使用患者 ID：", backend_patient_id)
@@ -2251,7 +2275,8 @@ if GRAPH_FEATURE_AVAILABLE:
         kg_paths_for_llm = []
 
 # ============================================================
-# LLM 固定走后端，不随 M1-M5 版本变化
+# LLM 优先使用当前版本 CSV 结果；后端结果作为补充
+# 这样 Streamlit Cloud 后端 patient 为空时，LLM 仍可解释当前版本分型和医院指标
 # ============================================================
 
 backend_metric_judgements = safe_list(
@@ -2265,12 +2290,18 @@ backend_feature_states = safe_list(
     or []
 )
 
+# 当前版本 CSV 中提取出的医院参考范围判定 / feature states 优先
+llm_metric_judgements = safe_list(metric_judgements) or backend_metric_judgements
+llm_feature_states = safe_list(feature_states) or backend_feature_states
+
+# ai / stab 已经在前面被 version_patient_result 覆盖过，所以这里必须用 ai / stab
+# 不能继续用 backend_ai / backend_stab
 llm_context = build_llm_context(
-    patient_id=backend_patient_id,
-    ai=backend_ai,
-    stability=backend_stab,
-    metric_judgements=backend_metric_judgements,
-    feature_states=backend_feature_states,
+    patient_id=backend_patient_id or patient_id,
+    ai=ai,
+    stability=stab,
+    metric_judgements=llm_metric_judgements,
+    feature_states=llm_feature_states,
     rair=backend_rair,
     rome=backend_rome,
     rag=backend_rag,
