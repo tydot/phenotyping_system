@@ -275,43 +275,140 @@ def build_median_profile(cluster_df: pd.DataFrame, metric_cols) -> Dict[str, flo
     return profile
 
 
-def build_abnormality_rate(cluster_df: pd.DataFrame, metric_cols) -> Dict[str, float]:
+def build_boundary_summary(cluster_df: pd.DataFrame) -> Dict[str, Any]:
     """
-    这里不强行使用医学参考范围。
-    只计算缺失率和边界比例，避免伪造异常阈值。
+    只汇总边界/稳定性信息。
+    如果当前版本没有可靠的 is_boundary 字段，则不强行显示 100% 稳定。
     """
-    result = {}
+    if "is_boundary" not in cluster_df.columns:
+        return {}
 
-    if "is_boundary" in cluster_df.columns:
-        result["边界患者比例"] = float(cluster_df["is_boundary"].mean())
+    s = cluster_df["is_boundary"].dropna()
 
-    for col in metric_cols[:6]:
-        missing_rate = float(cluster_df[col].isna().mean())
-        result[f"{col}缺失比例"] = missing_rate
+    if s.empty:
+        return {}
 
-    return result
+    s_bool = s.astype(bool)
+    boundary_n = int(s_bool.sum())
+    total_n = int(len(s_bool))
+    boundary_rate = float(boundary_n / total_n) if total_n > 0 else None
+
+    return {
+        "可评估样本数": total_n,
+        "边界患者数": boundary_n,
+        "边界患者比例": boundary_rate,
+        "稳定患者比例": 1.0 - boundary_rate if boundary_rate is not None else None,
+    }
 
 
-def build_rair_stats(cluster_df: pd.DataFrame) -> Dict[str, Any]:
-    rair_candidates = [
-        "rair_min_volume",
-        "RAIR诱发最小容积",
-        "relaxation_amplitude",
-        "松弛幅度",
-        "t_min",
-        "最低点时间",
-    ]
+def build_data_quality_table(cluster_df: pd.DataFrame, metric_cols) -> pd.DataFrame:
+    """
+    数据质量表：展示核心功能指标的有效样本数、缺失数和缺失比例。
+    不在这里伪造医学异常阈值。
+    """
+    rows = []
+    total_n = len(cluster_df)
 
-    stats = {}
+    if total_n == 0:
+        return pd.DataFrame(columns=["指标", "有效样本数", "缺失数", "缺失比例"])
 
-    for col in rair_candidates:
-        if col in cluster_df.columns:
-            values = pd.to_numeric(cluster_df[col], errors="coerce").dropna()
+    for col in metric_cols:
+        if col not in cluster_df.columns:
+            continue
+
+        values = pd.to_numeric(cluster_df[col], errors="coerce")
+        valid_n = int(values.notna().sum())
+        missing_n = int(total_n - valid_n)
+        missing_rate = float(missing_n / total_n)
+
+        rows.append(
+            {
+                "指标": col,
+                "有效样本数": valid_n,
+                "缺失数": missing_n,
+                "缺失比例": missing_rate,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def find_numeric_col_by_keywords(df: pd.DataFrame, keywords):
+    """
+    根据关键词模糊匹配真实列名，并确保该列可以转为数值。
+    用于兼容 RAIR诱发最小容积(ml) 这类带单位的列名。
+    """
+    for keyword in keywords:
+        keyword_lower = str(keyword).lower()
+
+        for col in df.columns:
+            col_lower = str(col).lower()
+
+            if keyword_lower not in col_lower:
+                continue
+
+            values = pd.to_numeric(df[col], errors="coerce").dropna()
             if not values.empty:
-                stats[f"{col}中位数"] = float(values.median())
-                stats[f"{col}有效比例"] = float(values.shape[0] / len(cluster_df))
+                return col
 
-    return stats
+    return None
+
+
+def build_rair_stats(cluster_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    RAIR 统计：按关键词模糊识别 RAIR 相关数值列。
+    """
+    candidate_map = {
+        "RAIR诱发最小容积": [
+            "rair_min_volume",
+            "rair诱发最小容积",
+            "rair最小容积",
+            "rair_min",
+        ],
+        "松弛幅度": [
+            "relaxation_amplitude",
+            "松弛幅度",
+            "松弛率",
+        ],
+        "最低点时间": [
+            "t_min",
+            "最低点时间",
+            "最低点",
+        ],
+    }
+
+    rows = []
+    total_n = len(cluster_df)
+
+    if total_n == 0:
+        return pd.DataFrame()
+
+    for display_name, keywords in candidate_map.items():
+        col = find_numeric_col_by_keywords(cluster_df, keywords)
+
+        if not col:
+            continue
+
+        values = pd.to_numeric(cluster_df[col], errors="coerce").dropna()
+
+        if values.empty:
+            continue
+
+        q1 = float(values.quantile(0.25))
+        q3 = float(values.quantile(0.75))
+
+        rows.append(
+            {
+                "RAIR指标": display_name,
+                "原始列名": col,
+                "有效样本数": int(values.shape[0]),
+                "有效比例": float(values.shape[0] / total_n),
+                "中位数": float(values.median()),
+                "四分位间距": f"{q1:.2f}–{q3:.2f}",
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 
 def describe_cluster(cluster_id, size, stable_ratio, profile: Dict[str, Any]) -> str:
@@ -425,8 +522,9 @@ else:
 
 metric_cols = pick_metric_columns(clinical_df)
 profile = build_median_profile(cluster_df, metric_cols)
-abn = build_abnormality_rate(cluster_df, metric_cols)
-rair_stats = build_rair_stats(cluster_df)
+boundary_summary = build_boundary_summary(cluster_df)
+data_quality_df = build_data_quality_table(cluster_df, metric_cols)
+rair_stats_df = build_rair_stats(cluster_df)
 phenotype_description = describe_cluster(cluster_id, size, stable_ratio, profile)
 
 
@@ -470,23 +568,58 @@ st.divider()
 
 
 # ============================================================
-# 功能异常比例 / 数据质量
+# 稳定性与数据完整性
 # ============================================================
 
-st.subheader("功能异常比例与数据质量（Abnormality / Data Quality）")
+st.subheader("稳定性与数据完整性（Stability / Data Completeness）")
 
-df_abn = build_kv_df(abn, "项目", "比例")
+st.caption(
+    "本模块仅展示边界患者比例和核心功能指标缺失情况；"
+    "当前页面不根据医学参考范围自动判定“异常”。"
+)
 
-if df_abn.empty:
-    st.info("暂无异常比例或数据质量统计。")
+if boundary_summary:
+    q1, q2, q3, q4 = st.columns(4)
+
+    with q1:
+        st.metric("可评估样本数", boundary_summary.get("可评估样本数", "-"))
+
+    with q2:
+        st.metric("边界患者数", boundary_summary.get("边界患者数", "-"))
+
+    with q3:
+        st.metric("边界患者比例", fmt_ratio(boundary_summary.get("边界患者比例")))
+
+    with q4:
+        st.metric("稳定患者比例", fmt_ratio(boundary_summary.get("稳定患者比例")))
 else:
-    st.bar_chart(df_abn.set_index("项目"))
-    df_abn_show = df_abn.copy()
-    df_abn_show["比例"] = df_abn_show["比例"].apply(fmt_ratio)
-    st.dataframe(df_abn_show, use_container_width=True, hide_index=True)
+    st.info("当前版本未提供可靠的边界患者 / 稳定性字段，因此不显示稳定性比例。")
+
+st.markdown("#### 核心功能指标数据完整性")
+
+if data_quality_df.empty:
+    st.info("暂无核心功能指标数据质量统计。")
+else:
+    dq_show = data_quality_df.copy()
+    dq_show["缺失比例"] = dq_show["缺失比例"].apply(fmt_ratio)
+
+    st.dataframe(
+        dq_show,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    missing_nonzero = data_quality_df[data_quality_df["缺失比例"] > 0].copy()
+
+    if missing_nonzero.empty:
+        st.success("当前集群核心功能指标无缺失。")
+    else:
+        st.markdown("#### 存在缺失的指标")
+        st.bar_chart(
+            missing_nonzero.set_index("指标")["缺失比例"]
+        )
 
 st.divider()
-
 
 # ============================================================
 # RAIR 统计
@@ -494,21 +627,18 @@ st.divider()
 
 st.subheader("RAIR 相关统计（RAIR-related Statistics）")
 
-if not isinstance(rair_stats, dict) or not rair_stats:
-    st.info("暂无 RAIR 相关统计。")
+if rair_stats_df is None or rair_stats_df.empty:
+    st.info("当前版本未识别到可用的 RAIR 数值列。请在调试区查看原始列名。")
 else:
-    df_rair = build_kv_df(rair_stats, "RAIR 指标", "数值")
-    df_rair_show = df_rair.copy()
+    rair_show = rair_stats_df.copy()
+    rair_show["有效比例"] = rair_show["有效比例"].apply(fmt_ratio)
+    rair_show["中位数"] = rair_show["中位数"].apply(lambda x: fmt_number(x, 2))
 
-    def fmt_rair_value(row):
-        key = str(row["RAIR 指标"])
-        value = row["数值"]
-        if "比例" in key:
-            return fmt_ratio(value)
-        return fmt_number(value, 3)
-
-    df_rair_show["数值"] = df_rair_show.apply(fmt_rair_value, axis=1)
-    st.dataframe(df_rair_show, use_container_width=True, hide_index=True)
+    st.dataframe(
+        rair_show,
+        use_container_width=True,
+        hide_index=True,
+    )
 
 st.divider()
 
