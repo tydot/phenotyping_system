@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 from typing import Any, Dict, Tuple
-
+import pandas as pd
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -40,7 +40,237 @@ def _safe_float(x):
         return float(x)
     except Exception:
         return None
+def _safe_bool(x):
+    if isinstance(x, bool):
+        return x
+    if x is None:
+        return False
 
+    s = str(x).strip().lower()
+
+    if s in {"true", "1", "yes", "y", "是", "边界", "boundary"}:
+        return True
+
+    if s in {"false", "0", "no", "n", "否", "稳定", "stable"}:
+        return False
+
+    return False
+
+
+def _find_first_col(df: pd.DataFrame, candidates):
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def _read_patient_row_from_csv(path: Path, patient_id: str):
+    if not path.exists():
+        return None
+
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return None
+
+    if df is None or df.empty:
+        return None
+
+    patient_col = _find_first_col(
+        df,
+        [
+            "patient_id",
+            "pid_key",
+            "pid",
+            "PID",
+            "PatientID",
+            "Patient_ID",
+            "病例号",
+            "患者编号",
+            "患者ID",
+            "id",
+        ],
+    )
+
+    if not patient_col:
+        return None
+
+    df = df.copy()
+    df["__pid_match__"] = df[patient_col].apply(normalize_pid)
+    matched = df[df["__pid_match__"] == normalize_pid(patient_id)]
+
+    if matched.empty:
+        return None
+
+    return matched.iloc[0].drop(labels=["__pid_match__"], errors="ignore").to_dict()
+
+
+def _get_patient_consensus_fallback(patient_id: str):
+    """
+    Cloud fallback:
+    backend.db 查询不到时，直接从 processed/M1 或 outputs/consensus 读取分型结果。
+    """
+
+    candidate_files = [
+        ROOT_DIR / "processed" / "M1" / "consensus_labels.csv",
+        ROOT_DIR / "processed" / "M1" / "merged_clinical_all.csv",
+        ROOT_DIR / "outputs" / "consensus" / "consensus_labels.csv",
+        ROOT_DIR / "outputs" / "consensus" / "clinical_with_consensus_clusters.csv",
+        ROOT_DIR / "outputs" / "clinical" / "clinical_with_consensus_clusters.csv",
+    ]
+
+    for path in candidate_files:
+        row = _read_patient_row_from_csv(path, patient_id)
+        if not row:
+            continue
+
+        cluster = (
+            row.get("consensus_cluster")
+            or row.get("cluster")
+            or row.get("Cluster")
+            or row.get("final_cluster")
+            or row.get("label")
+            or row.get("consensus_label")
+            or row.get("共识簇")
+            or row.get("AI分型")
+        )
+
+        confidence = (
+            row.get("confidence")
+            or row.get("Confidence")
+            or row.get("consensus_confidence")
+            or row.get("vote_confidence")
+            or row.get("stability_confidence")
+            or row.get("置信度")
+            or row.get("稳定性置信度")
+        )
+
+        switch_rate = row.get("switch_rate")
+        if switch_rate is None:
+            conf_float = _safe_float(confidence)
+            switch_rate = 1 - conf_float if conf_float is not None else None
+
+        is_boundary_raw = (
+            row.get("is_boundary")
+            if "is_boundary" in row
+            else row.get("boundary")
+        )
+
+        if is_boundary_raw is None:
+            conf_float = _safe_float(confidence)
+            is_boundary = bool(conf_float is not None and conf_float < 0.8)
+        else:
+            is_boundary = _safe_bool(is_boundary_raw)
+
+        gender = (
+            row.get("gender")
+            or row.get("sex")
+            or row.get("性别")
+        )
+
+        return {
+            "patient_id": normalize_pid(patient_id),
+            "consensus_cluster": cluster,
+            "confidence": confidence,
+            "switch_rate": switch_rate,
+            "is_boundary": is_boundary,
+            "gender": gender,
+        }
+
+    return None
+
+
+def _get_patient_clinical_fallback(patient_id: str):
+    """
+    Cloud fallback:
+    backend.db 查询不到临床指标时，直接从 processed/M1/merged_clinical_all.csv 读取，
+    并映射成 get_patient_view 内部使用的英文 key。
+    """
+
+    candidate_files = [
+        ROOT_DIR / "processed" / "M1" / "merged_clinical_all.csv",
+        ROOT_DIR / "outputs" / "clinical" / "clinical_with_consensus_clusters.csv",
+        ROOT_DIR / "outputs" / "consensus" / "clinical_with_consensus_clusters.csv",
+    ]
+
+    raw = None
+    for path in candidate_files:
+        raw = _read_patient_row_from_csv(path, patient_id)
+        if raw:
+            break
+
+    if not raw:
+        return {}
+
+    def first_value(keys):
+        for key in keys:
+            if key in raw:
+                value = raw.get(key)
+                if value is not None and str(value).strip() not in {"", "nan", "None", "-"}:
+                    return value
+        return None
+
+    clinical = {
+        "gender": first_value(["gender", "sex", "性别"]),
+        "resting_pressure": first_value([
+            "resting_pressure",
+            "肛门括约肌静息压(mmHg)",
+            "肛门括约肌静息压 (mmHg)",
+        ]),
+        "anal_length": first_value([
+            "anal_length",
+            "肛门括约肌长度(cm)",
+            "肛门括约肌长度 (cm)",
+        ]),
+        "msp": first_value([
+            "msp",
+            "MSP",
+            "最大缩榨压MSP（mmHg）",
+            "最大缩榨压MSP(mmHg)",
+            "最大缩榨压 MSP (mmHg)",
+        ]),
+        "squeeze_duration": first_value([
+            "squeeze_duration",
+            "缩肛持续时间(s)",
+            "缩肛持续时间 (s)",
+        ]),
+        "defecatory_rectal_pressure": first_value([
+            "defecatory_rectal_pressure",
+            "排便时直肠压力(mmHg)",
+            "排便时直肠压力 (mmHg)",
+        ]),
+        "rair_min_volume": first_value([
+            "rair_min_volume",
+            "RAIR诱发最小容积(ml)",
+            "RAIR 诱发最小容积 (ml)",
+        ]),
+        "first_sensation": first_value([
+            "first_sensation",
+            "初始感觉阈值(ml)",
+            "初始感觉阈值 (ml)",
+        ]),
+        "desire_to_defecate": first_value([
+            "desire_to_defecate",
+            "初始便意阈值(ml)",
+            "初始便意阈值 (ml)",
+        ]),
+        "urgency_threshold": first_value([
+            "urgency_threshold",
+            "排便窘迫感阈值(ml)",
+            "排便窘迫感阈值 (ml)",
+        ]),
+        "max_tolerable_volume": first_value([
+            "max_tolerable_volume",
+            "最大容量感觉阈值(ml)",
+            "最大容量感觉阈值 (ml)",
+        ]),
+    }
+
+    return {
+        k: v
+        for k, v in clinical.items()
+        if v is not None and str(v).strip() not in {"", "nan", "None", "-"}
+    }
 
 def resolve_gender(clinical: Dict[str, Any], consensus: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
     """
@@ -265,17 +495,26 @@ def get_patient_view(patient_id: str):
         return None
 
     consensus = get_patient_consensus(patient_id)
+
+    # Cloud fallback：数据库 / 旧路径没读到时，直接读当前 processed/M1 CSV
+    if consensus is None:
+        consensus = _get_patient_consensus_fallback(patient_id)
+
     if consensus is None:
         return None
 
     clinical = get_patient_clinical(patient_id) or {}
+
+    # Cloud fallback：临床表没读到时，直接读当前 processed/M1/merged_clinical_all.csv
+    if not clinical:
+        clinical = _get_patient_clinical_fallback(patient_id) or {}
 
     gender, gender_meta = resolve_gender(clinical, consensus)
 
     cluster = int(consensus.get("consensus_cluster", -1)) if consensus.get("consensus_cluster") is not None else None
     confidence = _safe_float(consensus.get("confidence")) or 0.0
     switch_rate = _safe_float(consensus.get("switch_rate")) or 0.0
-    is_boundary = bool(consensus.get("is_boundary"))
+    is_boundary = _safe_bool(consensus.get("is_boundary"))
 
     core_metrics = {}
     descriptive_metrics = {}
