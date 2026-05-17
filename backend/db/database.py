@@ -40,5 +40,45 @@ def init_db():
         )
     """)
 
+    # 患者临床数据表
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS patient_clinical (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id TEXT UNIQUE,
+            pid_key TEXT,
+            consensus_cluster INTEGER,
+            confidence REAL,
+            switch_rate REAL,
+            sex TEXT,
+            age INTEGER,
+            main_symptom TEXT,
+            resting_pressure REAL,
+            msp REAL,
+            squeeze_duration REAL,
+            defecatory_rectal_pressure REAL,
+            first_sensation REAL,
+            desire_to_defecate REAL,
+            urgency_threshold REAL,
+            max_tolerable_volume REAL,
+            rair_min_volume REAL,
+            anal_length REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # 患者共识数据表
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS patient_consensus (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id TEXT UNIQUE,
+            pid_key TEXT,
+            consensus_cluster INTEGER,
+            confidence REAL,
+            switch_rate REAL,
+            is_boundary INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     conn.close()
