@@ -1,0 +1,11 @@
+﻿指标,样本量,cluster数,clusters,各cluster样本量,H,p_raw,epsilon_squared,effect_size_label,p_adj_holm,显著性_raw,显著性_adj,是否显著_adj,ANOVA_是否适用,推荐尺度,版本,分析人群
+肛门括约肌静息压(mmHg),968,3,"[0, 1, 2]","[314, 324, 330]",345.8332130904503,8.00335254741716e-76,0.35630384776212465,large,8.00335254741716e-75,***,***,True,False,nonparametric_or_robust,attn_pooling-8,stable
+最大缩榨压MSP（mmHg）,968,3,"[0, 1, 2]","[314, 324, 330]",224.44190587619764,1.832564988622219e-49,0.23050974702196647,medium,1.649308489759997e-48,***,***,True,False,nonparametric_or_robust,attn_pooling-8,stable
+最大容量感觉阈值(ml),953,3,"[0, 1, 2]","[308, 317, 328]",9.379503356058137,0.009188967695523754,0.007767898269534881,negligible,0.04594483847761877,**,*,True,False,nonparametric_or_robust,attn_pooling-8,stable
+肛门括约肌长度(cm),968,3,"[0, 1, 2]","[314, 324, 330]",90.47946974496733,2.2523339448313823e-20,0.09168856968390397,medium,1.8018671558651059e-19,***,***,True,False,nonparametric_or_robust,attn_pooling-8,stable
+缩肛持续时间(s),968,3,"[0, 1, 2]","[314, 324, 330]",7.357284383938764,0.025257246054617696,0.005551590035169704,negligible,0.10102898421847079,*,ns,False,False,nonparametric_or_robust,attn_pooling-8,stable
+排便时直肠压力(mmHg),968,3,"[0, 1, 2]","[314, 324, 330]",40.162556598931516,1.9002539544559876e-09,0.03954669077609484,small,1.3301777681191914e-08,***,***,True,False,nonparametric_or_robust,attn_pooling-8,stable
+RAIR诱发最小容积(ml),968,3,"[0, 1, 2]","[314, 324, 330]",1.430498566887665,0.48907017950049014,0.0,negligible,0.6106476229118893,ns,ns,False,False,nonparametric_or_robust,attn_pooling-8,stable
+初始感觉阈值(ml),953,3,"[0, 1, 2]","[311, 315, 327]",5.858205092650919,0.05344498102332831,0.004061268518579915,negligible,0.16033494306998491,ns,ns,False,False,nonparametric_or_robust,attn_pooling-8,stable
+初始便意阈值(ml),958,3,"[0, 1, 2]","[313, 316, 329]",2.3727647773006777,0.30532381145594467,0.0003903296097389295,negligible,0.6106476229118893,ns,ns,False,False,nonparametric_or_robust,attn_pooling-8,stable
+排便窘迫感阈值(ml),958,3,"[0, 1, 2]","[313, 317, 328]",11.122475481740572,0.0038440155567141037,0.009552330347372327,negligible,0.02306409334028462,**,*,True,False,nonparametric_or_robust,attn_pooling-8,stable

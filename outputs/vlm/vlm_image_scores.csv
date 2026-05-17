@@ -1,0 +1,1 @@
+patient_id,image_path,image_index,resting_pressure_score,squeeze_pressure_score,defecation_pressure_score,rair_score,waveform_quality_score,overall_score,error

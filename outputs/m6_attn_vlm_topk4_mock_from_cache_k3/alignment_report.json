@@ -1,0 +1,34 @@
+{
+  "image_embeddings_path": "H:\\windows\\图像数据\\dataProcess\\outputs\\cache\\image_embeddings.npy",
+  "image_meta_path": "H:\\windows\\图像数据\\dataProcess\\outputs\\cache\\image_meta.csv",
+  "vlm_score_csv": "C:\\Users\\Lenovo\\Desktop\\phenotyping_system-main\\outputs\\vlm\\vlm_image_scores_m1_topk4_mock.csv",
+  "out_dir": "C:\\Users\\Lenovo\\Desktop\\phenotyping_system-main\\outputs\\m6_attn_vlm_topk4_mock_from_cache_k3",
+  "image_embeddings_shape": [
+    16458,
+    768
+  ],
+  "image_meta_shape": [
+    16458,
+    3
+  ],
+  "vlm_score_shape": [
+    15509,
+    22
+  ],
+  "matched": 15509,
+  "total": 15509,
+  "match_rate": 1.0,
+  "duplicated_meta_keys": 0,
+  "protocol_order": [
+    "RestPressure",
+    "Contraction",
+    "Defecation",
+    "Cough",
+    "rair"
+  ],
+  "frame_embedding_dim": 768,
+  "patient_embedding_concat_dim": 3840,
+  "n_patients": 1096,
+  "weight_formula": "final_weight_raw = attention_weight * vlm_reweight_factor; final_weight_norm = group_normalized(final_weight_raw) within patient_id + protocol",
+  "note": "当前输入文件为 mock VLM score CSV；若 vlm_mode=mock，结果只能作为流程验证或 mock-VLM reweighting 结果。"
+}

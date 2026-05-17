@@ -1,0 +1,11 @@
+﻿source_index,patient_id,protocol,rank,image_path,status,error,vlm_score_raw,vlm_image_quality,vlm_pattern_label,vlm_reason,vlm_uncertain,vlm_mode,finish_reason
+0,2,Contraction,0,D:\dataProcess\preprocessed_features\002\Contraction\002-易良富-2022-6-29-Contraction(提肛收缩)-1.npy,ok,,3,good,收缩压力梯度分布,图像显示清晰颜色分层和压力结构，模式较清楚,False,real_xiaomi,stop
+1,2,Contraction,1,D:\dataProcess\preprocessed_features\002\Contraction\002-易良富-2022-6-29-Contraction(提肛收缩)-2.npy,ok,,3,good,收缩压力分布热图,图像呈现红、黄、绿、蓝等颜色块和条带，压力分布结构清晰可见，与收缩协议相关。,False,real_xiaomi,stop
+2,2,Cough,0,D:\dataProcess\preprocessed_features\002\Cough\002-易良富-2022-6-29-Cough-1.npy,ok,,3,good,咳嗽期间压力分布模式,图像显示清晰的颜色条带和压力结构,True,real_xiaomi,stop
+3,2,Cough,1,D:\dataProcess\preprocessed_features\002\Cough\002-易良富-2022-6-29-Cough-2.npy,ok,,4,excellent,咳嗽协议下压力热图显示清晰垂直压力分布,图像颜色鲜明，结构连续，压力模式对比明显且易于识别。,False,real_xiaomi,stop
+4,2,Defecation,0,D:\dataProcess\preprocessed_features\002\Defecation\002-易良富-2022-6-29-Defecation(模拟排便)-1.npy,ok,,4,excellent,垂直压力条带结构,图像清晰显示红、黄、绿等颜色条带，压力分布连续且对比明显。,False,real_xiaomi,stop
+5,2,Defecation,1,D:\dataProcess\preprocessed_features\002\Defecation\002-易良富-2022-6-29-Defecation(模拟排便)-2.npy,ok,,4,excellent,排便协议压力热图显示清晰连续的压力条带,图像颜色鲜明对比明显，模式结构连续易于识别,False,real_xiaomi,stop
+6,2,RestPressure,0,D:\dataProcess\preprocessed_features\002\RestPressure\002-易良富-2022-6-29-Rest Pressure(静息压)-1.npy,ok,,3,good,休息压力热图显示水平压力分布,图像显示清晰的颜色梯度和连续条带，模式符合休息压力协议。,False,real_xiaomi,stop
+7,20240901,RestPressure,0,D:\dataProcess\preprocessed_features\20240901\RestPressure\20240901-张红星-2024-9-1-Rest Pressure(静息压)-1.npy,ok,,4,excellent,静息压力热图显示清晰振荡模式,图像颜色对比明显，模式连续清晰可见,False,real_xiaomi,stop
+8,2,rair,0,D:\dataProcess\preprocessed_features\002\rair\002-易良富-2022-6-29-RAIR(抑制性反射)-20ml-1.npy,ok,,3,good,压力热图显示水平条带状压力分布,图像质量较好，压力梯度连续且颜色对比明显，协议相关模式清晰可识别。,False,real_xiaomi,stop
+9,2,rair,1,D:\dataProcess\preprocessed_features\002\rair\002-易良富-2022-6-29-RAIR(抑制性反射)-40ml-1.npy,ok,,1,poor,未提供图像数据，无法评估模式,图像数据未显示，无法进行质控评估,True,real_xiaomi,stop

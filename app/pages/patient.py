@@ -1841,7 +1841,54 @@ else:
     st.warning(
         "当前版本结果文件中未找到该患者，将使用后端默认患者结果展示。"
     )
+# ============================================================
+# 云端 fallback：
+# 如果 get_patient_view() 没有读到后端 patient 对象，
+# 则至少用当前版本 CSV 的 raw_row / ai / stability 构造一个页面可用 patient。
+# ============================================================
 
+if (not patient) and version_patient_result:
+    fallback_raw_row = safe_dict(version_patient_result.get("raw_row"))
+
+    patient = {
+        "patient_id": patient_id,
+        "raw_row": fallback_raw_row,
+        "ai_result": ai,
+        "stability": stab,
+        "physiology": {},
+        "representation": {},
+        "rair": {},
+        "rome_iv": {},
+        "rag": {},
+        "rag_recommendations": [],
+        "llm_analysis": {},
+        "gender_meta": {},
+    }
+
+    backend_patient_id = patient_id
+
+    backend_ai = safe_dict(patient.get("ai_result"))
+    backend_phys = safe_dict(patient.get("physiology"))
+    backend_representation = safe_dict(patient.get("representation"))
+    backend_rair = safe_dict(patient.get("rair"))
+    backend_stab = safe_dict(patient.get("stability"))
+    backend_rome = safe_dict(patient.get("rome_iv"))
+    backend_group_stats = safe_dict(patient.get("group_statistics"))
+    backend_llm_analysis = safe_dict(patient.get("llm_analysis"))
+    backend_rag = safe_dict(patient.get("rag"))
+    backend_rag_recommendations = safe_list(patient.get("rag_recommendations"))
+    backend_gender_meta = safe_dict(patient.get("gender_meta"))
+
+    phys = backend_phys
+    representation = backend_representation
+    rair = backend_rair
+    rome = backend_rome
+    llm_analysis = backend_llm_analysis
+    rag = backend_rag
+    rag_recommendations = backend_rag_recommendations
+    gender_meta = backend_gender_meta
+
+    st.info("云端未读到后端 patient 对象，当前已使用版本 CSV 构造 fallback patient。")
 # -----------------------------
 # AI phenotype assignment
 # -----------------------------
@@ -2307,6 +2354,15 @@ llm_context = build_llm_context(
     rag=backend_rag,
     kg_paths=kg_paths_for_llm,
 )
+
+with st.expander("调试：查看最终 LLM 输入来源"):
+    st.write("ai:", ai)
+    st.write("stab:", stab)
+    st.write("metric_judgements count:", len(metric_judgements))
+    st.write("feature_states count:", len(feature_states))
+    st.write("backend_metric_judgements count:", len(backend_metric_judgements))
+    st.write("backend_feature_states count:", len(backend_feature_states))
+    st.json(llm_context)
 
 if not isinstance(llm_context, dict):
     llm_context = {}
