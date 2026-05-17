@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 import streamlit.components.v1 as components
 import tempfile
 import os
+import subprocess
 
 from dotenv import load_dotenv, dotenv_values
 
@@ -1709,6 +1710,24 @@ backend_patient_id, patient, backend_patient_debug = load_backend_patient_with_f
 import inspect
 
 with st.expander("调试：云端 get_patient_view 数据源"):
+    with st.expander("调试：Cloud 当前 Git 版本"):
+        try:
+            current_commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(ROOT_DIR),
+                text=True,
+            ).strip()
+            current_branch = subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=str(ROOT_DIR),
+                text=True,
+            ).strip()
+
+            st.write("Cloud branch:", current_branch)
+            st.write("Cloud commit:", current_commit)
+        except Exception as e:
+            st.write("读取 git commit 失败:", e)
+
     st.write("ROOT_DIR:", str(ROOT_DIR))
     st.write("cwd:", os.getcwd())
     st.write("backend_patient_id:", backend_patient_id)
