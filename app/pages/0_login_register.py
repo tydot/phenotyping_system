@@ -16,10 +16,58 @@ from backend.auth.auth_service import (
     ensure_auth_state,
     get_current_user,
 )
+from backend.db.database import get_conn
+
+def ensure_default_users():
+    import os
+    
+    default_users = [
+        {
+            "username": os.getenv("ADMIN_USER", "admin"),
+            "password": os.getenv("ADMIN_PASS"),
+            "role": "admin",
+            "patient_id": None,
+            "full_name": "系统管理员"
+        },
+        {
+            "username": os.getenv("DOCTOR_USER", "doctor_zhang"),
+            "password": os.getenv("DOCTOR_PASS"),
+            "role": "doctor",
+            "patient_id": None,
+            "full_name": "张医生"
+        },
+        {
+            "username": os.getenv("PATIENT_USER", "patient_210259070"),
+            "password": os.getenv("PATIENT_PASS"),
+            "role": "patient",
+            "patient_id": "210259070",
+            "full_name": "患者"
+        },
+    ]
+    
+    for user in default_users:
+        if not user["password"]:
+            continue
+            
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE username = ?", (user["username"],))
+        exists = cur.fetchone()
+        conn.close()
+        
+        if not exists:
+            register_user(
+                username=user["username"],
+                password=user["password"],
+                role=user["role"],
+                patient_id=user["patient_id"],
+                full_name=user["full_name"]
+            )
 
 st.set_page_config(page_title="登录注册 | ARM 功能表型系统", layout="centered")
 
 init_user_db()
+ensure_default_users()
 ensure_auth_state()
 
 st.title("🔐 登录注册")
