@@ -42,3 +42,5 @@ torchvision>=0.25,<0.26
 
 # === LLM推理（可选）===
 openai>=1.40.0,<2
+
+cos-python-sdk-v5==1.9.43
