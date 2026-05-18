@@ -268,6 +268,44 @@ def safe_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
+def build_physiology_from_raw_row(raw_row: dict) -> dict:
+    raw_row = safe_dict(raw_row)
+
+    core_keys = [
+        "肛门括约肌静息压(mmHg)",
+        "最大缩榨压MSP（mmHg）",
+        "排便时直肠压力(mmHg)",
+        "RAIR诱发最小容积(ml)",
+    ]
+
+    desc_keys = [
+        "肛门括约肌长度(cm)",
+        "缩肛持续时间(s)",
+        "初始感觉阈值(ml)",
+        "初始便意阈值(ml)",
+        "排便窘迫感阈值(ml)",
+        "最大容量感觉阈值(ml)",
+    ]
+
+    core_metrics = {}
+    descriptive_metrics = {}
+
+    for key in core_keys:
+        value = raw_row.get(key)
+        if value is not None and str(value).strip() not in ["", "nan", "None", "-"]:
+            core_metrics[key] = value
+
+    for key in desc_keys:
+        value = raw_row.get(key)
+        if value is not None and str(value).strip() not in ["", "nan", "None", "-"]:
+            descriptive_metrics[key] = value
+
+    return {
+        "core_metrics": core_metrics,
+        "descriptive_metrics": descriptive_metrics,
+    }
+
+
 def add_unique_id(candidates: List[str], value: Any):
     value = normalize_patient_id(value)
     if value and value not in candidates:
@@ -1022,7 +1060,101 @@ def resolve_gender_display(patient: Dict[str, Any], gender_meta: Dict[str, Any])
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 NON_IMAGE_EXTENSIONS = {".npy", ".npz", ".csv", ".pkl", ".pt", ".pth", ".json", ".txt"}
+@st.cache_resource(show_spinner=False)
+def get_cos_client():
+    try:
+        from qcloud_cos import CosConfig, CosS3Client
+    except Exception:
+        return None
 
+    secret_id = st.secrets.get("COS_SECRET_ID", os.environ.get("COS_SECRET_ID"))
+    secret_key = st.secrets.get("COS_SECRET_KEY", os.environ.get("COS_SECRET_KEY"))
+    region = st.secrets.get("COS_REGION", os.environ.get("COS_REGION"))
+
+    if not secret_id or not secret_key or not region:
+        return None
+
+    config = CosConfig(
+        Region=region,
+        SecretId=secret_id,
+        SecretKey=secret_key,
+        Scheme="https",
+    )
+    return CosS3Client(config)
+
+
+@st.cache_data(show_spinner=False)
+def find_and_download_image_from_cos(patient_id: str, filename_or_path: str) -> Optional[str]:
+    client = get_cos_client()
+    if client is None:
+        return None
+
+    bucket = st.secrets.get("COS_BUCKET", os.environ.get("COS_BUCKET"))
+    prefix = st.secrets.get("COS_PREFIX", os.environ.get("COS_PREFIX", "images")).strip("/")
+
+    if not bucket:
+        return None
+
+    patient_id = normalize_patient_id(patient_id)
+    stem = Path(str(filename_or_path)).stem
+
+    if not patient_id or not stem:
+        return None
+
+    cache_dir = ROOT_DIR / ".cache" / "cos_images" / patient_id
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    search_prefix = f"{prefix}/{patient_id}/"
+    marker = ""
+
+    while True:
+        try:
+            response = client.list_objects(
+                Bucket=bucket,
+                Prefix=search_prefix,
+                Marker=marker,
+                MaxKeys=1000,
+            )
+        except Exception:
+            return None
+
+        contents = response.get("Contents", []) or []
+
+        for obj in contents:
+            key = obj.get("Key", "")
+            suffix = Path(key).suffix.lower()
+
+            if suffix not in IMAGE_EXTENSIONS:
+                continue
+
+            if Path(key).stem != stem:
+                continue
+
+            local_path = cache_dir / Path(key).name
+
+            if local_path.exists():
+                return str(local_path)
+
+            try:
+                client.download_file(
+                    Bucket=bucket,
+                    Key=key,
+                    DestFilePath=str(local_path),
+                )
+                if local_path.exists():
+                    return str(local_path)
+            except Exception:
+                continue
+
+        is_truncated = str(response.get("IsTruncated", "")).lower() == "true"
+        if not is_truncated:
+            break
+
+        marker = response.get("NextMarker") or ""
+        if not marker:
+            break
+
+    return None
 
 def _clean_path_value(value: Any) -> Optional[str]:
     if value is None:
@@ -1066,49 +1198,44 @@ def _resolve_candidate_path(path_value: Any) -> Optional[str]:
     if p2.exists() and p2.suffix.lower() in IMAGE_EXTENSIONS:
         return str(p2)
 
-    # Windows 绝对图片路径，例如 H:/xxx/xxx.png
+    # Windows 绝对路径只有在当前环境真实存在时才返回。
+    # Streamlit Cloud 上 H:\... 不存在，不能直接返回，否则会阻断 COS fallback。
     if suffix in IMAGE_EXTENSIONS and (":" in s or s.startswith("\\\\")):
-        return s
-
-    return None
+        return None
 
 
 @st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
 def find_image_by_stem(image_root_dir: str, filename_or_path: str) -> Optional[str]:
-    """
-    根据 top-k 里的 .npy 文件名，在预处理图像目录里查找同名 .png/.jpg。
-
-    例如：
-    210259070-王玲-2024-3-1-Contraction(压肛收缩)-1.npy
-
-    匹配：
-    210259070-王玲-2024-3-1-Contraction(压肛收缩)-1.png
-    """
     image_root_dir = _clean_path_value(image_root_dir)
     filename_or_path = _clean_path_value(filename_or_path)
 
-    if not image_root_dir or not filename_or_path:
-        return None
-
-    root = Path(image_root_dir)
-    if not root.exists():
+    if not filename_or_path:
         return None
 
     stem = Path(filename_or_path).stem
 
-    # 先查当前目录
-    for ext in IMAGE_EXTENSIONS:
-        candidate = root / f"{stem}{ext}"
-        if candidate.exists():
-            return str(candidate)
+    # 1. 先查本地目录。Cloud 上通常不存在，没关系。
+    if image_root_dir:
+        root = Path(image_root_dir)
+        if root.exists():
+            for ext in IMAGE_EXTENSIONS:
+                candidate = root / f"{stem}{ext}"
+                if candidate.exists():
+                    return str(candidate)
 
-    # 再递归查子目录
-    for ext in IMAGE_EXTENSIONS:
-        matches = list(root.rglob(f"{stem}{ext}"))
-        if matches:
-            return str(matches[0])
+            for ext in IMAGE_EXTENSIONS:
+                matches = list(root.rglob(f"{stem}{ext}"))
+                if matches:
+                    return str(matches[0])
 
-    return None
+    # 2. 本地找不到，再去腾讯云 COS：
+    # COS 结构应为 images/{patient_id}/{protocol}/images/*.png
+    patient_id_for_cos = st.session_state.get("active_patient_id", "")
+    return find_and_download_image_from_cos(
+        patient_id=patient_id_for_cos,
+        filename_or_path=filename_or_path,
+    )
 
 
 def resolve_patient_image_path(
@@ -1874,7 +2001,7 @@ if (not patient) and version_patient_result:
         "raw_row": fallback_raw_row,
         "ai_result": ai,
         "stability": stab,
-        "physiology": {},
+        "physiology": build_physiology_from_raw_row(fallback_raw_row),
         "representation": {},
         "rair": {},
         "rome_iv": {},
@@ -2368,9 +2495,9 @@ llm_context = build_llm_context(
     stability=stab,
     metric_judgements=llm_metric_judgements,
     feature_states=llm_feature_states,
-    rair=backend_rair,
-    rome=backend_rome,
-    rag=backend_rag,
+    rair=rair,
+    rome=rome,
+    rag=rag,
     kg_paths=kg_paths_for_llm,
 )
 
