@@ -1088,7 +1088,106 @@ def find_and_download_image_from_cos(patient_id: str, filename_or_path: str) -> 
     client = get_cos_client()
     if client is None:
         return None
+@st.cache_data(show_spinner=False)
+def list_and_download_protocol_images_from_cos(patient_id: str) -> List[Dict[str, Any]]:
+    """
+    当 backend_representation.protocol_topk_details 为空时，
+    直接从 COS 的 images/{patient_id}/ 下找每个协议阶段的代表图。
+    """
 
+    client = get_cos_client()
+    if client is None:
+        return []
+
+    bucket = st.secrets.get("COS_BUCKET", os.environ.get("COS_BUCKET"))
+    prefix = st.secrets.get("COS_PREFIX", os.environ.get("COS_PREFIX", "images")).strip("/")
+
+    if not bucket:
+        return []
+
+    patient_id = normalize_patient_id(patient_id)
+    if not patient_id:
+        return []
+
+    search_prefix = f"{prefix}/{patient_id}/"
+    cache_dir = ROOT_DIR / ".cache" / "cos_images" / patient_id
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    results: Dict[str, Dict[str, Any]] = {}
+    marker = ""
+
+    while True:
+        try:
+            response = client.list_objects(
+                Bucket=bucket,
+                Prefix=search_prefix,
+                Marker=marker,
+                MaxKeys=1000,
+            )
+        except Exception:
+            return []
+
+        contents = response.get("Contents", []) or []
+
+        for obj in contents:
+            key = obj.get("Key", "")
+            suffix = Path(key).suffix.lower()
+
+            if suffix not in IMAGE_EXTENSIONS:
+                continue
+
+            protocol = infer_protocol_from_text(key)
+            if not protocol:
+                continue
+
+            if protocol in results:
+                continue
+
+            local_path = cache_dir / Path(key).name
+
+            if not local_path.exists():
+                try:
+                    client.download_file(
+                        Bucket=bucket,
+                        Key=key,
+                        DestFilePath=str(local_path),
+                    )
+                except Exception:
+                    continue
+
+            if local_path.exists():
+                results[protocol] = {
+                    "protocol": protocol,
+                    "image_path": str(local_path),
+                    "source_item": {
+                        "cos_key": key,
+                        "source": "cos_protocol_fallback",
+                    },
+                    "filename": Path(key).name,
+                    "rank": None,
+                    "score": None,
+                    "weight": None,
+                }
+
+        is_truncated = str(response.get("IsTruncated", "")).lower() == "true"
+        if not is_truncated:
+            break
+
+        marker = response.get("NextMarker") or ""
+        if not marker:
+            break
+
+    ordered_results: List[Dict[str, Any]] = []
+
+    for protocol in PROTOCOL_DISPLAY_ORDER:
+        if protocol in results:
+            ordered_results.append(results[protocol])
+
+    for protocol, item in results.items():
+        if protocol not in PROTOCOL_DISPLAY_ORDER:
+            ordered_results.append(item)
+
+    return ordered_results
     bucket = st.secrets.get("COS_BUCKET", os.environ.get("COS_BUCKET"))
     prefix = st.secrets.get("COS_PREFIX", os.environ.get("COS_PREFIX", "images")).strip("/")
 
@@ -1203,8 +1302,6 @@ def _resolve_candidate_path(path_value: Any) -> Optional[str]:
     if suffix in IMAGE_EXTENSIONS and (":" in s or s.startswith("\\\\")):
         return None
 
-
-@st.cache_data(show_spinner=False)
 @st.cache_data(show_spinner=False)
 def find_image_by_stem(image_root_dir: str, filename_or_path: str) -> Optional[str]:
     image_root_dir = _clean_path_value(image_root_dir)
@@ -1787,7 +1884,7 @@ if st.sidebar.button("刷新患者数据", key=f"refresh_patient_{selected_versi
 
 default_image_root = os.environ.get(
     "PREPROCESSED_FEATURES_DIR",
-    str(ROOT_DIR / "preprocessed_features_images"),
+    str(ROOT_DIR / "images"),
 )
 
 image_root_input = st.sidebar.text_input(
@@ -2184,6 +2281,19 @@ image_paths_for_vlm = resolve_patient_image_paths_by_protocol(
     protocol_topk_details=protocol_topk_details_for_vlm,
     image_root_dir=image_root_input,
 )
+with st.expander("调试：COS 图像解析"):
+    st.write("COS_BUCKET:", st.secrets.get("COS_BUCKET", os.environ.get("COS_BUCKET", "-")))
+    st.write("COS_REGION:", st.secrets.get("COS_REGION", os.environ.get("COS_REGION", "-")))
+    st.write("COS_PREFIX:", st.secrets.get("COS_PREFIX", os.environ.get("COS_PREFIX", "-")))
+    st.write("patient_id:", patient_id)
+    st.write("protocol_topk_details_for_vlm count:", len(protocol_topk_details_for_vlm))
+    st.write("image_paths_for_vlm count:", len(image_paths_for_vlm))
+    st.json(image_paths_for_vlm)
+# 如果 top-k / 本地路径都没解析到图，则直接从 COS 的 images/{patient_id}/ 下拿代表图
+if not image_paths_for_vlm:
+    image_paths_for_vlm = list_and_download_protocol_images_from_cos(
+        patient_id=patient_id
+    )
 
 if image_paths_for_vlm:
     image_path_for_vlm = "；".join(
