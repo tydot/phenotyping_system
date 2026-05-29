@@ -1,0 +1,49 @@
+# =============================================================
+# ARM 功能表型系统 - Jetson Orin Nano Super 8GB 专用镜像
+# 基于 NVIDIA L4T PyTorch 镜像（含 CUDA + PyTorch）
+# =============================================================
+
+FROM nvcr.io/nvidia/l4t-pytorch:r36.4.0-pth2.4-py3
+
+WORKDIR /app
+
+# 系统依赖（git 用于 torch.hub 下载 DINOv2）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 依赖（先复制 requirements 以利用 Docker 缓存层）
+COPY requirements_jetson.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements_jetson.txt
+
+# 预缓存 DINOv2 模型权重（构建时下载，避免运行时下载）
+RUN python -c "import torch; torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')" && \
+    echo "DINOv2 model cached successfully"
+
+# CUDA 内存优化
+ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:256
+
+# 项目代码
+COPY . .
+
+# 创建必要目录
+RUN mkdir -p /app/logs /app/processed /app/outputs /app/data
+
+EXPOSE 8501
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+
+CMD ["streamlit", "run", "app/app.py", \
+     "--server.port=8501", \
+     "--server.address=0.0.0.0", \
+     "--server.maxUploadSize=100", \
+     "--server.enableCORS=false", \
+     "--server.enableXsrfProtection=false"]

@@ -134,6 +134,10 @@ def load_dinov2(model_name: str, device: torch.device):
             f"原始错误：{repr(e)}"
         )
 
+    # FP16 推理：Jetson Orin 有良好 FP16 支持，可减少约 50% 显存
+    use_fp16 = device.type == "cuda"
+    if use_fp16:
+        base.half()
     base.eval().to(device)
 
     class DinoWrapper(nn.Module):
@@ -189,9 +193,17 @@ def extract_embeddings_from_uploaded_files(protocol_files: Dict[str, List]) -> T
         raise ValueError("未检测到可用于推理的图片。")
 
     x = torch.from_numpy(np.stack(xs, axis=0)).to(DEVICE)
+    # FP16 推理：与模型精度一致
+    if DEVICE.type == "cuda":
+        x = x.half()
 
     with torch.inference_mode():
-        y = model(x).detach().cpu().numpy().astype("float32")
+        y = model(x).detach().cpu().float().numpy().astype("float32")
+
+    # 释放 GPU 临时显存（Jetson 8GB 统一内存需要及时回收）
+    if DEVICE.type == "cuda":
+        del x
+        torch.cuda.empty_cache()
 
     return y, meta
 
