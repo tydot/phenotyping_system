@@ -1088,6 +1088,63 @@ def find_and_download_image_from_cos(patient_id: str, filename_or_path: str) -> 
     client = get_cos_client()
     if client is None:
         return None
+
+    bucket = st.secrets.get("COS_BUCKET", os.environ.get("COS_BUCKET"))
+    prefix = st.secrets.get("COS_PREFIX", os.environ.get("COS_PREFIX", "images")).strip("/")
+    if not bucket or not filename_or_path:
+        return None
+
+    patient_id = normalize_patient_id(patient_id)
+    if not patient_id:
+        return None
+
+    stem = Path(filename_or_path).stem
+    cache_dir = ROOT_DIR / ".cache" / "cos_images" / patient_id
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # 搜索 COS 中 images/{patient_id}/ 下匹配的图片
+    search_prefix = f"{prefix}/{patient_id}/"
+    marker = ""
+    while True:
+        try:
+            response = client.list_objects(
+                Bucket=bucket,
+                Prefix=search_prefix,
+                Marker=marker,
+                MaxKeys=1000,
+            )
+        except Exception:
+            return None
+
+        contents = response.get("Contents", []) or []
+        for obj in contents:
+            key = obj.get("Key", "")
+            key_stem = Path(key).stem
+            suffix = Path(key).suffix.lower()
+
+            if suffix not in IMAGE_EXTENSIONS:
+                continue
+            if stem not in key_stem and key_stem not in stem:
+                continue
+
+            local_path = cache_dir / Path(key).name
+            if not local_path.exists():
+                try:
+                    client.download_file(Bucket=bucket, Key=key, DestFilePath=str(local_path))
+                except Exception:
+                    continue
+
+            if local_path.exists():
+                return str(local_path)
+
+        if response.get("IsTruncated"):
+            marker = response.get("NextMarker", "")
+        else:
+            break
+
+    return None
+
+
 @st.cache_data(show_spinner=False)
 def list_and_download_protocol_images_from_cos(patient_id: str) -> List[Dict[str, Any]]:
     """
@@ -1931,63 +1988,6 @@ backend_patient_id, patient, backend_patient_debug = load_backend_patient_with_f
     input_patient_id=patient_id,
     patient_row=patient_row,
 )
-import inspect
-
-with st.expander("调试：云端 get_patient_view 数据源"):
-    with st.expander("调试：Cloud 当前 Git 版本"):
-        try:
-            current_commit = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(ROOT_DIR),
-                text=True,
-            ).strip()
-            current_branch = subprocess.check_output(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                cwd=str(ROOT_DIR),
-                text=True,
-            ).strip()
-
-            st.write("Cloud branch:", current_branch)
-            st.write("Cloud commit:", current_commit)
-        except Exception as e:
-            st.write("读取 git commit 失败:", e)
-
-    st.write("ROOT_DIR:", str(ROOT_DIR))
-    st.write("cwd:", os.getcwd())
-    st.write("backend_patient_id:", backend_patient_id)
-    st.write("patient 是否为空:", not bool(patient))
-    st.write("patient keys:", list(patient.keys()) if isinstance(patient, dict) else type(patient))
-
-    st.write("get_patient_view 所在文件:", inspect.getfile(get_patient_view))
-
-    st.markdown("**候选后端 ID 读取情况**")
-    st.dataframe(pd.DataFrame(backend_patient_debug), use_container_width=True, hide_index=True)
-
-    for rel in [
-        "data",
-        "outputs",
-        "backend",
-        "knowledge_base",
-        "preprocessed_features",
-    ]:
-        p = ROOT_DIR / rel
-        st.write(f"{rel} exists:", p.exists(), str(p))
-        if p.exists() and p.is_dir():
-            st.write(f"{rel} 前20个文件:", [str(x.relative_to(ROOT_DIR)) for x in list(p.rglob("*"))[:20]])
-with st.expander("调试：查看后端患者数据读取情况"):
-    st.write("页面输入患者 ID：", patient_id)
-    st.write("后端实际使用患者 ID：", backend_patient_id)
-    st.write("后端患者对象是否为空：", not bool(patient))
-    st.dataframe(
-        pd.DataFrame(backend_patient_debug),
-        use_container_width=True,
-        hide_index=True,
-    )
-    if isinstance(patient, dict):
-        st.write("后端患者字段：", list(patient.keys()))
-
-
-
 # ============================================================
 # 后端固定结果：KG / RAG / LLM / VLM / RAIR / Rome / representation
 # 这些不随 M1-M5 版本切换变化
@@ -2258,21 +2258,47 @@ else:
     st.caption("当前版本结果文件中暂无患者原始临床指标，无法进行医院参考范围判定。")
 
 # ============================================================
+# ============================================================
 # VLM / FR-GCD-Lite：图像侧区域引导解释
-# 必须放在 LLM 生成之前，这样结果才能进入 llm_context
 # ============================================================
 
-# ============================================================
-# VLM 固定走后端，不随 M1-M5 版本变化
-# ============================================================
-
-raw_row_for_vlm = safe_dict(patient.get("raw_row"))
-if not raw_row_for_vlm:
-    raw_row_for_vlm = safe_dict(patient)
-
-protocol_topk_details_for_vlm = safe_list(
-    backend_representation.get("protocol_topk_details")
+st.divider()
+st.subheader("🖼️ 图像侧区域引导解释（FR-GCD-Lite）")
+st.caption(
+    "该模块仅作为图像侧辅助证据，不参与无监督分型，不修改 cluster，不输出临床诊断。"
 )
+
+# -----------------------------
+# 用户控制
+# -----------------------------
+enable_vlm = st.checkbox(
+    "启用图像侧解释（调用 VLM API）",
+    value=False,
+    key=f"enable_vlm_{patient_id}",
+)
+
+force_refresh_vlm = st.checkbox(
+    "强制刷新 VLM 缓存",
+    value=False,
+    key=f"force_refresh_vlm_{patient_id}",
+)
+
+# -----------------------------
+# VLM cache 包装
+# -----------------------------
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_generate_region_findings(patient_id: str, image_path: str):
+    return generate_region_findings(
+        patient_id=patient_id,
+        image_path=image_path,
+        output_dir=str(ROOT_DIR / "outputs" / "vlm_region_crops"),
+    )
+
+# -----------------------------
+# 解析五协议图像
+# -----------------------------
+raw_row_for_vlm = safe_dict(patient.get("raw_row")) or {}
+protocol_topk_details_for_vlm = safe_list(backend_representation.get("protocol_topk_details"))
 
 image_paths_for_vlm = resolve_patient_image_paths_by_protocol(
     patient=patient,
@@ -2281,82 +2307,113 @@ image_paths_for_vlm = resolve_patient_image_paths_by_protocol(
     protocol_topk_details=protocol_topk_details_for_vlm,
     image_root_dir=image_root_input,
 )
-with st.expander("调试：COS 图像解析"):
-    st.write("COS_BUCKET:", st.secrets.get("COS_BUCKET", os.environ.get("COS_BUCKET", "-")))
-    st.write("COS_REGION:", st.secrets.get("COS_REGION", os.environ.get("COS_REGION", "-")))
-    st.write("COS_PREFIX:", st.secrets.get("COS_PREFIX", os.environ.get("COS_PREFIX", "-")))
-    st.write("patient_id:", patient_id)
-    st.write("protocol_topk_details_for_vlm count:", len(protocol_topk_details_for_vlm))
-    st.write("image_paths_for_vlm count:", len(image_paths_for_vlm))
-    st.json(image_paths_for_vlm)
-# 如果 top-k / 本地路径都没解析到图，则直接从 COS 的 images/{patient_id}/ 下拿代表图
+
+# COS fallback
 if not image_paths_for_vlm:
-    image_paths_for_vlm = list_and_download_protocol_images_from_cos(
-        patient_id=patient_id
-    )
+    image_paths_for_vlm = list_and_download_protocol_images_from_cos(patient_id=patient_id)
 
+# -----------------------------
+# 展示调试信息
+# -----------------------------
+with st.expander("调试：VLM 图像路径解析"):
+    st.write("解析到协议图数量：", len(image_paths_for_vlm))
+    debug_rows = []
+    for item in image_paths_for_vlm:
+        debug_rows.append({
+            "protocol": item.get("protocol"),
+            "image_path": item.get("image_path"),
+            "filename": item.get("filename"),
+            "rank": item.get("rank"),
+            "score": item.get("score"),
+        })
+    if debug_rows:
+        st.dataframe(pd.DataFrame(debug_rows), use_container_width=True, hide_index=True)
+
+# -----------------------------
+# 展示五协议原图
+# -----------------------------
 if image_paths_for_vlm:
-    image_path_for_vlm = "；".join(
-        [
-            f"{item.get('protocol')}: {item.get('image_path')}"
-            for item in image_paths_for_vlm
-        ]
-    )
+    st.markdown("### 五协议原始图像")
+    cols = st.columns(2)
+    for idx, item in enumerate(image_paths_for_vlm):
+        protocol = item.get("protocol", "Unknown")
+        image_path = item.get("image_path")
+        with cols[idx % 2]:
+            st.markdown(f"#### {protocol}")
+            show_image_safely(image_path=image_path, title=protocol, width=420)
 else:
-    image_path_for_vlm = None
+    st.warning("当前患者未解析到可用协议图像。")
 
-image_region_findings: List[Dict[str, Any]] = []
-image_region_error: Optional[str] = None
+# -----------------------------
+# 按钮触发 VLM
+# -----------------------------
+if enable_vlm:
+    if st.button("生成图像区域解释"):
+        image_region_findings = []
+        image_region_error = None
+        try:
+            all_region_findings = []
+            progress_bar = st.progress(0)
+            total_images = len(image_paths_for_vlm)
 
-if image_paths_for_vlm:
-    try:
-        all_region_findings: List[Dict[str, Any]] = []
+            for idx, path_item in enumerate(image_paths_for_vlm):
+                protocol = path_item.get("protocol")
+                one_image_path = path_item.get("image_path")
+                st.info(f"正在分析协议：{protocol}")
+                if not one_image_path:
+                    continue
 
-        for path_item in image_paths_for_vlm:
-            one_image_path = path_item.get("image_path")
-            protocol = path_item.get("protocol")
+                if force_refresh_vlm:
+                    cached_generate_region_findings.clear()
 
-            if not one_image_path:
-                continue
-
-            one_findings = generate_region_findings(
+                # 一次 API 调用整张协议图
+                one_findings = cached_generate_region_findings(
                     patient_id=str(backend_patient_id),
                     image_path=one_image_path,
-                    output_dir=str(ROOT_DIR / "outputs" / "vlm_region_crops"),
                 )
 
-            for finding in safe_list(one_findings):
-                finding = safe_dict(finding)
-                finding["matched_protocol"] = protocol
-                finding["matched_filename"] = path_item.get("filename")
-                finding["matched_rank"] = path_item.get("rank")
-                finding["matched_score"] = path_item.get("score")
-                finding["matched_weight"] = path_item.get("weight")
-                all_region_findings.append(finding)
+                # 附加协议信息
+                for finding in safe_list(one_findings):
+                    finding = safe_dict(finding)
+                    finding["matched_protocol"] = protocol
+                    finding["matched_filename"] = path_item.get("filename")
+                    finding["matched_rank"] = path_item.get("rank")
+                    finding["matched_score"] = path_item.get("score")
+                    finding["matched_weight"] = path_item.get("weight")
+                    all_region_findings.append(finding)
 
-        vlm_feature_state_dict = build_vlm_feature_state_dict(
-            feature_states=feature_states,
-            metric_judgements=metric_judgements,
+                progress_bar.progress((idx + 1) / total_images)
+
+            # consistency gate
+            vlm_feature_state_dict = build_vlm_feature_state_dict(
+                feature_states=feature_states,
+                metric_judgements=metric_judgements,
+            )
+            image_region_findings = check_visual_clinical_consistency(
+                region_findings=all_region_findings,
+                feature_states=vlm_feature_state_dict,
+            )
+
+            st.success("图像侧区域解释生成完成。")
+
+        except Exception as e:
+            image_region_error = str(e)
+            st.error(f"VLM 推理失败：{e}")
+
+        # -----------------------------
+        # 展示结果
+        # -----------------------------
+        render_image_region_findings_section(
+            image_path_for_vlm="；".join([
+                f"{x.get('protocol')}: {x.get('image_path')}" for x in image_paths_for_vlm
+            ]),
+            image_region_findings=image_region_findings,
+            image_region_error=image_region_error,
+            is_patient_user=is_patient_user,
         )
-
-        image_region_findings = check_visual_clinical_consistency(
-            region_findings=all_region_findings,
-            feature_states=vlm_feature_state_dict,
-        )
-
-    except Exception as e:
-        image_region_error = str(e)
 else:
-    image_region_error = None
+    st.info("当前未启用图像侧解释。勾选上方选项后，将调用 VLM API 生成区域级视觉解释。")
 
-st.divider()
-
-render_image_region_findings_section(
-    image_path_for_vlm=image_path_for_vlm,
-    image_region_findings=image_region_findings,
-    image_region_error=image_region_error,
-    is_patient_user=is_patient_user,
-)
 
 st.divider()
 
