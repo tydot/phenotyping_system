@@ -1,0 +1,3 @@
+﻿subset,n_patients,n_clusters,H_statistic,p_value,significant,version
+all,1067,3,36.038,1.4943231115007944e-08,True,M2
+stable,1062,3,36.055,1.4816645254859729e-08,True,M2
