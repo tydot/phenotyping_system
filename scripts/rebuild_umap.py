@@ -63,10 +63,11 @@ def generate_umap_3d(embeddings):
     from umap import UMAP
     reducer = UMAP(
         n_components=3,
-        n_neighbors=15,
-        min_dist=0.1,
+        n_neighbors=50,
+        min_dist=0.01,
         metric='cosine',
         random_state=42,
+        spread=2.0,
     )
     return reducer.fit_transform(embeddings)
 
