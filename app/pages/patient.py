@@ -2416,6 +2416,9 @@ else:
 # -----------------------------
 # 按钮触发 VLM
 # -----------------------------
+image_region_findings = []
+image_region_error = None
+
 if enable_vlm:
     if st.button("生成图像区域解释"):
         image_region_findings = []
