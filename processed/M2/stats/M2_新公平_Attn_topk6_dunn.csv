@@ -1,16 +1,25 @@
 ﻿指标,对比,p_adj,显著性,版本
-肛门括约肌静息压(mmHg),C0-C1,0.0,***,M2_新公平_Attn_topk6
-肛门括约肌静息压(mmHg),C0-C2,0.0,***,M2_新公平_Attn_topk6
-肛门括约肌静息压(mmHg),C1-C2,0.0,***,M2_新公平_Attn_topk6
-最大缩榨压MSP（mmHg）,C0-C1,0.0,***,M2_新公平_Attn_topk6
-最大缩榨压MSP（mmHg）,C0-C2,0.0,***,M2_新公平_Attn_topk6
-最大缩榨压MSP（mmHg）,C1-C2,0.0,***,M2_新公平_Attn_topk6
-肛门括约肌长度(cm),C0-C1,0.0011,**,M2_新公平_Attn_topk6
-肛门括约肌长度(cm),C0-C2,0.0,***,M2_新公平_Attn_topk6
-肛门括约肌长度(cm),C1-C2,0.0,***,M2_新公平_Attn_topk6
-排便时直肠压力(mmHg),C0-C1,0.002804,**,M2_新公平_Attn_topk6
-排便时直肠压力(mmHg),C0-C2,0.002804,**,M2_新公平_Attn_topk6
-排便时直肠压力(mmHg),C1-C2,0.0,***,M2_新公平_Attn_topk6
-排便窘迫感阈值(ml),C0-C1,0.468086,ns,M2_新公平_Attn_topk6
-排便窘迫感阈值(ml),C0-C2,0.009096,**,M2_新公平_Attn_topk6
-排便窘迫感阈值(ml),C1-C2,0.03462,*,M2_新公平_Attn_topk6
+肛门括约肌静息压(mmHg),0 vs 1,0.0,***,M2_新公平_Attn_topk6
+肛门括约肌静息压(mmHg),0 vs 2,0.0,***,M2_新公平_Attn_topk6
+肛门括约肌静息压(mmHg),1 vs 2,0.0,***,M2_新公平_Attn_topk6
+最大缩榨压MSP（mmHg）,0 vs 1,0.0,***,M2_新公平_Attn_topk6
+最大缩榨压MSP（mmHg）,0 vs 2,0.0,***,M2_新公平_Attn_topk6
+最大缩榨压MSP（mmHg）,1 vs 2,0.0,***,M2_新公平_Attn_topk6
+排便时直肠压力(mmHg),0 vs 1,0.003454,**,M2_新公平_Attn_topk6
+排便时直肠压力(mmHg),0 vs 2,0.001403,**,M2_新公平_Attn_topk6
+排便时直肠压力(mmHg),1 vs 2,0.0,***,M2_新公平_Attn_topk6
+初始感觉阈值(ml),0 vs 1,0.085286,ns,M2_新公平_Attn_topk6
+初始感觉阈值(ml),0 vs 2,0.335595,ns,M2_新公平_Attn_topk6
+初始感觉阈值(ml),1 vs 2,1.0,ns,M2_新公平_Attn_topk6
+初始便意阈值(ml),0 vs 1,1.0,ns,M2_新公平_Attn_topk6
+初始便意阈值(ml),0 vs 2,1.0,ns,M2_新公平_Attn_topk6
+初始便意阈值(ml),1 vs 2,1.0,ns,M2_新公平_Attn_topk6
+排便窘迫感阈值(ml),0 vs 1,1.0,ns,M2_新公平_Attn_topk6
+排便窘迫感阈值(ml),0 vs 2,0.013165,*,M2_新公平_Attn_topk6
+排便窘迫感阈值(ml),1 vs 2,0.049341,*,M2_新公平_Attn_topk6
+最大容量感觉阈值(ml),0 vs 1,1.0,ns,M2_新公平_Attn_topk6
+最大容量感觉阈值(ml),0 vs 2,0.041333,*,M2_新公平_Attn_topk6
+最大容量感觉阈值(ml),1 vs 2,0.025727,*,M2_新公平_Attn_topk6
+RAIR诱发最小容积(ml),0 vs 1,1.0,ns,M2_新公平_Attn_topk6
+RAIR诱发最小容积(ml),0 vs 2,1.0,ns,M2_新公平_Attn_topk6
+RAIR诱发最小容积(ml),1 vs 2,0.951817,ns,M2_新公平_Attn_topk6

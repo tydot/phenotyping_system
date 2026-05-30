@@ -1,0 +1,11 @@
+﻿分析对象,Rome类别,指标,H统计量,p值,是否显著(p<0.05)
+stable,Dyssynergic,肛门括约肌静息压(mmHg),141.563,1.8192682873590063e-31,是
+stable,Dyssynergic,最大缩榨压MSP（mmHg）,93.404,5.220022307341887e-21,是
+stable,Dyssynergic,排便时直肠压力(mmHg),9.515,0.008587203085128163,是
+stable,Dyssynergic,初始感觉阈值(ml),2.103,0.3494755350540414,否
+stable,Dyssynergic,最大容量感觉阈值(ml),1.643,0.4398551814512208,否
+stable,Poor_Propulsion,肛门括约肌静息压(mmHg),191.068,3.2370253268051913e-42,是
+stable,Poor_Propulsion,最大缩榨压MSP（mmHg）,108.173,3.240525407344609e-24,是
+stable,Poor_Propulsion,排便时直肠压力(mmHg),6.601,0.03687150653312237,是
+stable,Poor_Propulsion,初始感觉阈值(ml),4.985,0.08272281050122852,否
+stable,Poor_Propulsion,最大容量感觉阈值(ml),12.774,0.0016835661396844032,是
