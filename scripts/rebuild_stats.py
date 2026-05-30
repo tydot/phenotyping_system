@@ -30,11 +30,13 @@ CONFIDENCE_THRESHOLD = 0.8
 METRICS = [
     '肛门括约肌静息压(mmHg)',
     '最大缩榨压MSP（mmHg）',
+    '肛门括约肌长度(cm)',
+    '缩肛持续时间(s)',
     '排便时直肠压力(mmHg)',
+    '最大容量感觉阈值(ml)',
     '初始感觉阈值(ml)',
     '初始便意阈值(ml)',
     '排便窘迫感阈值(ml)',
-    '最大容量感觉阈值(ml)',
     'RAIR诱发最小容积(ml)',
 ]
 
@@ -59,25 +61,32 @@ def run_kruskal(df, metrics, cluster_col='consensus_cluster'):
         k = len(groups)
         epsilon_sq = H / (n - 1) if n > 1 else 0
 
-        # Holm 校正（简化版）
-        p_adj = min(p_raw * len(metrics), 1.0)
-
-        sig_raw = '***' if p_raw < 0.001 else '**' if p_raw < 0.01 else '*' if p_raw < 0.05 else 'ns'
-        sig_adj = '***' if p_adj < 0.001 else '**' if p_adj < 0.01 else '*' if p_adj < 0.05 else 'ns'
-
+        # 暂存，后续统一 Holm 校正
         results.append({
             '指标': metric,
             '样本量': n,
             'H': round(H, 4),
             'p_raw': p_raw,
             'epsilon_squared': round(epsilon_sq, 6),
-            'p_adj_holm': p_adj,
-            '显著性_raw': sig_raw,
-            '显著性_adj': sig_adj,
-            '是否显著': p_raw < 0.05,
         })
 
-    return pd.DataFrame(results)
+    # 正确的 Holm step-down 校正
+    res_df = pd.DataFrame(results)
+    if len(res_df) > 0:
+        pvals = res_df['p_raw'].values
+        n_tests = len(pvals)
+        sorted_idx = np.argsort(pvals)
+        p_adj_holm = np.ones(n_tests)
+        for rank, idx in enumerate(sorted_idx):
+            p_adj_holm[idx] = min(pvals[idx] * (n_tests - rank), 1.0)
+        res_df['p_adj_holm'] = p_adj_holm
+        res_df['显著性_raw'] = res_df['p_raw'].apply(
+            lambda p: '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else 'ns')
+        res_df['显著性_adj'] = res_df['p_adj_holm'].apply(
+            lambda p: '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else 'ns')
+        res_df['是否显著'] = res_df['p_adj_holm'] < 0.05
+
+    return res_df
 
 
 def run_dunn(df, metrics, cluster_col='consensus_cluster'):
@@ -132,19 +141,23 @@ def main():
         # 确保 consensus_cluster 是数值
         df['consensus_cluster'] = pd.to_numeric(df['consensus_cluster'], errors='coerce')
 
+        # 稳定患者（confidence >= 0.8）
+        df_stable = df[df['confidence'] >= CONFIDENCE_THRESHOLD].copy()
+
         stats_dir = OUTPUT_DIR / ver / "stats"
         stats_dir.mkdir(parents=True, exist_ok=True)
 
-        # 全部患者
-        kruskal_all = run_kruskal(df, METRICS)
-        kruskal_all['版本'] = ver_name
-        kruskal_all.to_csv(stats_dir / f"{ver_name}_kruskal.csv", index=False, encoding='utf-8-sig')
-        print(f"  kruskal_all: {len(kruskal_all)} metrics, n={len(df)}")
+        # 稳定患者 Kruskal
+        kruskal_stable = run_kruskal(df_stable, METRICS)
+        kruskal_stable['版本'] = ver_name
+        kruskal_stable.to_csv(stats_dir / f"{ver_name}_kruskal.csv", index=False, encoding='utf-8-sig')
+        n_sig = kruskal_stable['是否显著'].sum() if len(kruskal_stable) > 0 else 0
+        print(f"  kruskal_stable: {len(kruskal_stable)} metrics, n={len(df_stable)}, sig={n_sig}")
 
-        dunn_all = run_dunn(df, METRICS)
-        dunn_all['版本'] = ver_name
-        dunn_all.to_csv(stats_dir / f"{ver_name}_dunn.csv", index=False, encoding='utf-8-sig')
-        print(f"  dunn_all: {len(dunn_all)} comparisons")
+        dunn_stable = run_dunn(df_stable, METRICS)
+        dunn_stable['版本'] = ver_name
+        dunn_stable.to_csv(stats_dir / f"{ver_name}_dunn.csv", index=False, encoding='utf-8-sig')
+        print(f"  dunn_stable: {len(dunn_stable)} comparisons")
 
     print("\n完成!")
 
