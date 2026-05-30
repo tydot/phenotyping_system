@@ -1571,6 +1571,7 @@ def resolve_patient_image_paths_by_protocol(
     representation: Dict[str, Any],
     protocol_topk_details: List[Any],
     image_root_dir: Optional[str] = None,
+    patient_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     为同一患者解析多个协议阶段的图像。
@@ -1688,10 +1689,8 @@ def resolve_patient_image_paths_by_protocol(
             }
 
     # 3. 兜底：按患者 ID + 协议名直接搜索本地 images 目录
-    if not results and image_root_dir:
-        patient_id_val = str(patient.get("patient_id", "") or patient.get("pid_key", "")).strip()
-        if patient_id_val:
-            local_images = find_images_by_patient_protocol(image_root_dir, patient_id_val)
+    if not results and image_root_dir and patient_id:
+        local_images = find_images_by_patient_protocol(image_root_dir, patient_id)
             for proto, img_path in local_images.items():
                 if proto not in results:
                     results[proto] = {
@@ -2375,6 +2374,7 @@ image_paths_for_vlm = resolve_patient_image_paths_by_protocol(
     representation=backend_representation,
     protocol_topk_details=protocol_topk_details_for_vlm,
     image_root_dir=image_root_input,
+    patient_id=patient_id,
 )
 
 # COS fallback
