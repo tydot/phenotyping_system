@@ -1691,17 +1691,17 @@ def resolve_patient_image_paths_by_protocol(
     # 3. 兜底：按患者 ID + 协议名直接搜索本地 images 目录
     if not results and image_root_dir and patient_id:
         local_images = find_images_by_patient_protocol(image_root_dir, patient_id)
-            for proto, img_path in local_images.items():
-                if proto not in results:
-                    results[proto] = {
-                        "protocol": proto,
-                        "image_path": img_path,
-                        "source_item": {"source": "local_directory_scan"},
-                        "filename": Path(img_path).name,
-                        "rank": None,
-                        "score": None,
-                        "weight": None,
-                    }
+        for proto, img_path in local_images.items():
+            if proto not in results:
+                results[proto] = {
+                    "protocol": proto,
+                    "image_path": img_path,
+                    "source_item": {"source": "local_directory_scan"},
+                    "filename": Path(img_path).name,
+                    "rank": None,
+                    "score": None,
+                    "weight": None,
+                }
 
     ordered_results: List[Dict[str, Any]] = []
 
