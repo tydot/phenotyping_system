@@ -5,16 +5,16 @@ version_order:
   - "M2_新公平_Attn_topk6"
   - "M3_新公平_Mean_all"
   - "M4_旧随机_Attn_topk4"
-  - "M5_旧随机_Mean_topk6"
+  - "M5_旧随机_Mean_mapp6"
 
 versions:
   M1_新公平_Attn_topk4:
-    display_name: "M1 - 新公平 Attention K4"
+    display_name: "M1 - 公平 Attention K4"
     short_name: "M1"
     role: "main"
-    description: "主实验版本：采用新公平确定性抽帧策略，基于 Attention Pooling，选取每个协议中最具代表性的 Top-4 帧。"
+    description: "主实验版本：采用公平确定性抽帧策略，基于 Attention Pooling，选取每个协议中最具代表性的 Top-4 帧（PCA 50维）。"
     sampling_strategy: "deterministic"
-    sampling_name: "新公平确定性抽帧"
+    sampling_name: "公平确定性抽帧"
     pooling: "attention"
     method: "确定性抽帧 + Attention Pooling + top-k=4"
     top_k: 4
@@ -33,12 +33,12 @@ versions:
       umap_figure: "processed/M1/umap_consensus_clusters.png"
 
   M2_新公平_Attn_topk6:
-    display_name: "M2 - 新公平 Attention K6"
+    display_name: "M2 - 公平 Attention K6"
     short_name: "M2"
     role: "ablation"
-    description: "消融对照版本：采用新公平确定性抽帧策略，基于 Attention Pooling，选取每个协议中最具代表性的 Top-6 帧。"
+    description: "消融对照版本：采用公平确定性抽帧策略，基于 Attention Pooling，选取每个协议中最具代表性的 Top-6 帧（PCA 50维）。"
     sampling_strategy: "deterministic"
-    sampling_name: "新公平确定性抽帧"
+    sampling_name: "公平确定性抽帧"
     pooling: "attention"
     method: "确定性抽帧 + Attention Pooling + top-k=6"
     top_k: 6
@@ -57,12 +57,12 @@ versions:
       umap_figure: "processed/M2/umap_consensus_clusters.png"
 
   M3_新公平_Mean_all:
-    display_name: "M3 - 新公平 Mean 全部帧"
+    display_name: "M3 - 公平 Mean 全部帧"
     short_name: "M3"
     role: "ablation"
-    description: "消融对照版本：采用新公平确定性抽帧策略，基于 Mean Pooling，保留全部有效帧进行协议级聚合。"
+    description: "消融对照版本：采用公平确定性抽帧策略，基于 Mean Pooling，保留全部有效帧进行协议级聚合（PCA 50维）。"
     sampling_strategy: "deterministic"
-    sampling_name: "新公平确定性抽帧"
+    sampling_name: "公平确定性抽帧"
     pooling: "mean"
     method: "确定性抽帧 + Mean Pooling + 全部帧"
     top_k: 0
@@ -85,7 +85,7 @@ versions:
     display_name: "M4 - 旧随机 Attention K4"
     short_name: "M4"
     role: "ablation"
-    description: "旧方法对照版本：采用随机受限抽帧策略，基于 Attention Pooling，每个协议最多保留 4 帧。"
+    description: "旧方法对照版本：采用随机受限抽帧策略，基于 Attention Pooling，每个协议最多保留 4 帧（PCA 50维）。"
     sampling_strategy: "random_limited"
     sampling_name: "旧随机受限抽帧"
     pooling: "attention"
@@ -105,16 +105,17 @@ versions:
       rome_cross_table: "processed/M4/rome_analysis/integrated_rome_with_conf.csv"
       umap_figure: "processed/M4/umap_consensus_clusters.png"
 
-  M5_旧随机_Mean_topk6:
-    display_name: "M5 - 旧随机 Mean K6"
+  M5_旧随机_Mean_mapp6:
+    display_name: "M5 - 旧随机 Mean MAPP6"
     short_name: "M5"
     role: "ablation"
-    description: "旧方法对照版本：采用随机受限抽帧策略，基于 Mean Pooling，每个协议最多保留 6 帧。"
+    description: "旧方法对照版本：采用随机受限抽帧策略，基于 Mean Pooling，MAPP=6 采样（每协议随机选 6 帧，PCA 50维）。"
     sampling_strategy: "random_limited"
     sampling_name: "旧随机受限抽帧"
     pooling: "mean"
-    method: "随机受限抽帧 + Mean Pooling + 最多6帧"
+    method: "随机受限抽帧 + Mean Pooling + MAPP=6"
     top_k: 6
+    top_k_note: "此处 top_k=6 对应 MAPP=6（每协议随机采样 6 帧），非 top-k 选择。"
     n_clusters: 3
     boundary_threshold: 0.8
     files:
@@ -123,8 +124,8 @@ versions:
       patient_clinical: "processed/M5/merged_clinical_all.csv"
       cohort_table: "processed/M5/merged_clinical_all.csv"
       merged_clinical: "processed/M5/merged_clinical_all.csv"
-      kruskal_stable: "processed/M5/stats/M5_旧随机_Mean_topk6_kruskal.csv"
-      dunn_stable: "processed/M5/stats/M5_旧随机_Mean_topk6_dunn.csv"
+      kruskal_stable: "processed/M5/stats/M5_旧随机_Mean_mapp6_kruskal.csv"
+      dunn_stable: "processed/M5/stats/M5_旧随机_Mean_mapp6_dunn.csv"
       rair_validation: "processed/M5/rair_analysis/rair_with_clusters_M5.csv"
       rome_cross_table: "processed/M5/rome_analysis/integrated_rome_with_conf.csv"
       umap_figure: "processed/M5/umap_consensus_clusters.png"
