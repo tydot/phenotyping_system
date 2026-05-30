@@ -1392,6 +1392,58 @@ def find_image_by_stem(image_root_dir: str, filename_or_path: str) -> Optional[s
     )
 
 
+@st.cache_data(show_spinner=False)
+def find_images_by_patient_protocol(
+    images_root: str, patient_id: str
+) -> Dict[str, str]:
+    """
+    按患者 ID + 协议名搜索本地 images 目录。
+    目录结构: images/{patient_id}/{protocol}/images/*.png
+    返回 {protocol: image_path} 的映射。
+    """
+    images_root = _clean_path_value(images_root)
+    if not images_root or not patient_id:
+        return {}
+
+    root = Path(images_root) / patient_id
+    if not root.exists():
+        return {}
+
+    results = {}
+    protocol_map = {
+        "contraction": "Contraction",
+        "cough": "Cough",
+        "defecation": "Defecation",
+        "restpressure": "RestPressure",
+        "rest": "RestPressure",
+        "rair": "rair",
+    }
+
+    for protocol_dir in root.iterdir():
+        if not protocol_dir.is_dir():
+            continue
+
+        dir_name_lower = protocol_dir.name.lower()
+        canonical = protocol_map.get(dir_name_lower, protocol_map.get(dir_name_lower.replace("_", ""), ""))
+        if not canonical:
+            canonical = protocol_dir.name
+
+        if canonical in results:
+            continue
+
+        # 搜索 images/ 子目录
+        img_subdir = protocol_dir / "images"
+        search_dir = img_subdir if img_subdir.exists() else protocol_dir
+
+        for ext in IMAGE_EXTENSIONS:
+            matches = sorted(search_dir.rglob(f"*{ext}"))
+            if matches:
+                results[canonical] = str(matches[0])
+                break
+
+    return results
+
+
 def resolve_patient_image_path(
     patient: Dict[str, Any],
     raw_row: Dict[str, Any],
@@ -1634,6 +1686,23 @@ def resolve_patient_image_paths_by_protocol(
                 "score": None,
                 "weight": None,
             }
+
+    # 3. 兜底：按患者 ID + 协议名直接搜索本地 images 目录
+    if not results and image_root_dir:
+        patient_id_val = str(patient.get("patient_id", "") or patient.get("pid_key", "")).strip()
+        if patient_id_val:
+            local_images = find_images_by_patient_protocol(image_root_dir, patient_id_val)
+            for proto, img_path in local_images.items():
+                if proto not in results:
+                    results[proto] = {
+                        "protocol": proto,
+                        "image_path": img_path,
+                        "source_item": {"source": "local_directory_scan"},
+                        "filename": Path(img_path).name,
+                        "rank": None,
+                        "score": None,
+                        "weight": None,
+                    }
 
     ordered_results: List[Dict[str, Any]] = []
 
