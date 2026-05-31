@@ -143,23 +143,39 @@ def main():
         # 确保 consensus_cluster 是数值
         df['consensus_cluster'] = pd.to_numeric(df['consensus_cluster'], errors='coerce')
 
-        # 稳定患者（confidence >= 0.8）
+        # 全部 + 稳定患者
         df_stable = df[df['confidence'] >= CONFIDENCE_THRESHOLD].copy()
 
         stats_dir = OUTPUT_DIR / ver / "stats"
         stats_dir.mkdir(parents=True, exist_ok=True)
 
-        # 稳定患者 Kruskal
+        # 全部患者 Kruskal + Dunn
+        kruskal_all = run_kruskal(df, METRICS)
+        kruskal_all['版本'] = ver_name
+        kruskal_all['分析人群'] = 'all'
+        dunn_all = run_dunn(df, METRICS)
+        dunn_all['版本'] = ver_name
+        dunn_all['分析人群'] = 'all'
+
+        # 稳定患者 Kruskal + Dunn
         kruskal_stable = run_kruskal(df_stable, METRICS)
         kruskal_stable['版本'] = ver_name
-        kruskal_stable.to_csv(stats_dir / f"{ver_name}_kruskal.csv", index=False, encoding='utf-8-sig')
-        n_sig = kruskal_stable['是否显著'].sum() if len(kruskal_stable) > 0 else 0
-        print(f"  kruskal_stable: {len(kruskal_stable)} metrics, n={len(df_stable)}, sig={n_sig}")
-
+        kruskal_stable['分析人群'] = 'stable'
         dunn_stable = run_dunn(df_stable, METRICS)
         dunn_stable['版本'] = ver_name
-        dunn_stable.to_csv(stats_dir / f"{ver_name}_dunn.csv", index=False, encoding='utf-8-sig')
-        print(f"  dunn_stable: {len(dunn_stable)} comparisons")
+        dunn_stable['分析人群'] = 'stable'
+
+        # 合并保存
+        kruskal_all = pd.concat([kruskal_all, kruskal_stable], ignore_index=True)
+        kruskal_all.to_csv(stats_dir / f"{ver_name}_kruskal.csv", index=False, encoding='utf-8-sig')
+
+        dunn_all = pd.concat([dunn_all, dunn_stable], ignore_index=True)
+        dunn_all.to_csv(stats_dir / f"{ver_name}_dunn.csv", index=False, encoding='utf-8-sig')
+
+        n_sig_a = kruskal_all[kruskal_all['分析人群']=='all']['是否显著'].sum()
+        n_sig_s = kruskal_all[kruskal_all['分析人群']=='stable']['是否显著'].sum()
+        print(f"  kruskal: all={len(df)} ({n_sig_a} sig), stable={len(df_stable)} ({n_sig_s} sig)")
+        print(f"  dunn: {len(dunn_all)} comparisons total")
 
     print("\n完成!")
 

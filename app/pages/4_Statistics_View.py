@@ -206,6 +206,27 @@ dunn_show = filter_by_metric(dunn_df, metric)
 
 
 # ============================================================
+# 分析人群选择
+# ============================================================
+
+population_options = []
+if kruskal_df is not None and not kruskal_df.empty and "分析人群" in kruskal_df.columns:
+    population_options = sorted(kruskal_df["分析人群"].dropna().unique())
+if not population_options:
+    population_options = ["stable"]
+
+population = st.selectbox(
+    "分析人群",
+    population_options,
+    index=0,
+    format_func=lambda x: "全部患者" if x == "all" else "稳定患者 (confidence≥0.8)",
+)
+
+kruskal_show = kruskal_show[kruskal_show["分析人群"] == population] if kruskal_show is not None and not kruskal_show.empty and "分析人群" in kruskal_show.columns else kruskal_show
+dunn_show = dunn_show[dunn_show["分析人群"] == population] if dunn_show is not None and not dunn_show.empty and "分析人群" in dunn_show.columns else dunn_show
+
+
+# ============================================================
 # 统计摘要
 # ============================================================
 
