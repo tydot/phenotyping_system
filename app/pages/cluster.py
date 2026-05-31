@@ -498,6 +498,30 @@ cluster_id = st.sidebar.selectbox(
     index=0,
 )
 
+# 分析人群切换
+st.sidebar.header("分析人群")
+population_cluster = st.sidebar.radio(
+    "分析人群",
+    options=["all", "stable"],
+    index=0,
+    format_func=lambda x: "全部患者" if x == "all" else "稳定患者 (conf>=0.8)",
+    key="cluster_population",
+)
+
+# 应用人群过滤
+if population_cluster == "stable":
+    clinical_df = clinical_df[clinical_df["confidence"] >= boundary_threshold].copy()
+    # 重新获取cluster values（稳定人群可能某个cluster为空）
+    cluster_values_filtered = sorted(
+        [x for x in clinical_df["consensus_cluster"].dropna().unique().tolist()]
+    )
+    if not cluster_values_filtered:
+        st.error("稳定患者中未找到有效的集群数据。")
+        st.stop()
+    # 确保选中的cluster在过滤后存在
+    if cluster_id not in cluster_values_filtered:
+        cluster_id = cluster_values_filtered[0]
+
 refresh = st.sidebar.button("刷新结果", key="cluster_refresh_btn")
 if refresh:
     st.cache_data.clear()
