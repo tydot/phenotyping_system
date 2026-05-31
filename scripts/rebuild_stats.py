@@ -70,7 +70,7 @@ def run_kruskal(df, metrics, cluster_col='consensus_cluster'):
             'epsilon_squared': round(epsilon_sq, 6),
         })
 
-    # 正确的 Holm step-down 校正
+    # 正确的 Holm step-down 校正（含单调性保证）
     res_df = pd.DataFrame(results)
     if len(res_df) > 0:
         pvals = res_df['p_raw'].values
@@ -79,6 +79,8 @@ def run_kruskal(df, metrics, cluster_col='consensus_cluster'):
         p_adj_holm = np.ones(n_tests)
         for rank, idx in enumerate(sorted_idx):
             p_adj_holm[idx] = min(pvals[idx] * (n_tests - rank), 1.0)
+        # 单调性修正：确保排序后的 adjusted p 单调递增
+        p_adj_holm[sorted_idx] = np.maximum.accumulate(p_adj_holm[sorted_idx])
         res_df['p_adj_holm'] = p_adj_holm
         res_df['显著性_raw'] = res_df['p_raw'].apply(
             lambda p: '***' if p < 0.001 else '**' if p < 0.01 else '*' if p < 0.05 else 'ns')
@@ -90,39 +92,39 @@ def run_kruskal(df, metrics, cluster_col='consensus_cluster'):
 
 
 def run_dunn(df, metrics, cluster_col='consensus_cluster'):
+    """真正的 Dunn 事后检验（使用 scikit-posthocs）。"""
+    try:
+        import scikit_posthocs as posthoc
+    except ImportError:
+        raise RuntimeError("请安装 scikit-posthocs: pip install scikit-posthocs")
+
     results = []
-    clusters = sorted(df[cluster_col].dropna().unique())
 
     for metric in metrics:
         if metric not in df.columns:
             continue
 
-        # 收集各 cluster 数据
-        cluster_data = {}
-        for c in clusters:
-            vals = df[df[cluster_col] == c][metric].dropna()
-            if len(vals) >= 5:
-                cluster_data[c] = vals
+        sub = df[[cluster_col, metric]].copy()
+        sub[metric] = pd.to_numeric(sub[metric], errors="coerce")
+        sub = sub.dropna()
 
-        if len(cluster_data) < 2:
+        clusters = sorted(sub[cluster_col].unique())
+        if len(clusters) < 2:
             continue
 
-        # 两两比较（简化版 Dunn：Mann-Whitney U + Holm 校正）
-        from scipy.stats import mannwhitneyu
-        pairs = list(combinations(sorted(cluster_data.keys()), 2))
-        n_tests = len(pairs)
+        mat = posthoc.posthoc_dunn(sub, val_col=metric, group_col=cluster_col, p_adjust="holm")
 
-        for i, (c1, c2) in enumerate(pairs):
-            U, p = mannwhitneyu(cluster_data[c1], cluster_data[c2], alternative='two-sided')
-            p_adj = min(p * n_tests, 1.0)
-            sig = '***' if p_adj < 0.001 else '**' if p_adj < 0.01 else '*' if p_adj < 0.05 else 'ns'
-
-            results.append({
-                '指标': metric,
-                '对比': f'{c1} vs {c2}',
-                'p_adj': round(p_adj, 6),
-                '显著性': sig,
-            })
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                p_adj = float(mat.iloc[i, j])
+                c1, c2 = int(clusters[i]), int(clusters[j])
+                sig = '***' if p_adj < 0.001 else '**' if p_adj < 0.01 else '*' if p_adj < 0.05 else 'ns'
+                results.append({
+                    '指标': metric,
+                    '对比': f'{c1} vs {c2}',
+                    'p_adj': round(p_adj, 6),
+                    '显著性': sig,
+                })
 
     return pd.DataFrame(results)
 
