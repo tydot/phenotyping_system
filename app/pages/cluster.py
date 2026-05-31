@@ -507,6 +507,8 @@ population_cluster = st.sidebar.radio(
     format_func=lambda x: "全部患者" if x == "all" else "稳定患者 (conf>=0.8)",
     key="cluster_population",
 )
+if population_cluster == "stable" and selected_version.startswith("M1_"):
+    st.sidebar.caption("M1 全部患者 confidence=1.0，两部分结果相同")
 
 # 应用人群过滤
 if population_cluster == "stable":
