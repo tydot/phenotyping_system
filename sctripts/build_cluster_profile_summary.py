@@ -29,7 +29,7 @@ import pandas as pd
 # 0. 路径配置
 # ============================================================
 
-RESULT_DIR = Path(r"H:\windows\图像数据\dataProcess\processed\within_cluster_results")
+RESULT_DIR = Path(__file__).parent.parent / "processed" / "within_cluster_results"
 
 INPUT_FILE = RESULT_DIR / "within_cluster_all_by_hospital_threshold.csv"
 
