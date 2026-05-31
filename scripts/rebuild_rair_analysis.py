@@ -44,10 +44,15 @@ def run_kruskal_rair(df, tag, out_dir):
         print(f"  {tag}: <2 clusters, skip")
         return None
 
-    groups = [
-        g['relaxation_amplitude'].values
-        for _, g in df.groupby('consensus_cluster')
-    ]
+    groups = []
+    for _, g in df.groupby('consensus_cluster'):
+        vals = g['relaxation_amplitude'].dropna().values
+        if len(vals) >= 5:
+            groups.append(vals)
+
+    if len(groups) < 2:
+        print(f"  {tag}: <2 valid clusters (min 5 per cluster), skip")
+        return None
 
     H, p = kruskal(*groups)
 
