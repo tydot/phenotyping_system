@@ -1379,7 +1379,10 @@ def find_image_by_stem(image_root_dir: str, filename_or_path: str) -> Optional[s
                     return str(candidate)
 
             for ext in IMAGE_EXTENSIONS:
-                matches = list(root.rglob(f"{stem}{ext}"))
+                try:
+                    matches = list(root.rglob(f"{stem}{ext}"))
+                except (FileNotFoundError, PermissionError):
+                    matches = []
                 if matches:
                     return str(matches[0])
 
