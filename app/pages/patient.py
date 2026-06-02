@@ -2793,7 +2793,7 @@ with tab_generated:
                     "confidence": ai.get("confidence", "-"),
                     "is_boundary": ai.get("is_boundary", False),
                 },
-                abnormal_metrics=compact_metric_judgements(safe_list(context.get("abnormal_metrics"))),
+                abnormal_metrics=safe_list(context.get("abnormal_metrics")),
                 llm_report=generated_report,
                 rair_info=rair,
                 rome=rome,
