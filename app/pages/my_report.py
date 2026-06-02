@@ -5,6 +5,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from datetime import datetime
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -348,3 +349,34 @@ st.caption(
     "⚠️ 本页面仅展示患者本人在系统默认版本下的功能表型分析结果，"
     "不用于临床诊断、治疗建议或医疗决策。"
 )
+
+st.divider()
+
+# PDF export
+if st.button("📥 下载我的报告 PDF"):
+    try:
+        from backend.report.pdf_export import generate_patient_report_pdf
+        from datetime import datetime
+
+        version_name = current_version.get("display_name", "M1")
+        pdf_bytes = generate_patient_report_pdf(
+            patient_id=patient_id,
+            ai_result={
+                "version": version_name,
+                "cluster": ai.get("cluster", "-"),
+                "confidence": ai.get("confidence", "-"),
+                "is_boundary": ai.get("is_boundary", False),
+            },
+            abnormal_metrics=[],
+            llm_report=f"AI 分型: Cluster {ai.get('cluster','?')}, 置信度: {ai.get('confidence','?')}, 边界患者: {'是' if ai.get('is_boundary') else '否'}",
+            rair_info=rair.get("features") if isinstance(rair, dict) else {},
+        )
+        st.download_button(
+            label="点击下载 PDF",
+            data=pdf_bytes,
+            file_name=f"ARM_Report_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+            mime="application/pdf",
+            key=f"dl_myreport_{patient_id}",
+        )
+    except Exception as e:
+        st.warning(f"PDF 生成失败: {e}")
