@@ -43,6 +43,12 @@ class PatientReportPDF(FPDF):
         if isinstance(v, float) and v != v: return d
         return str(v)
 
+    def _safe_text(self, text):
+        """If no Chinese font, strip to ASCII"""
+        if self.font_name == "Helvetica":
+            return text.encode("ascii", errors="replace").decode("ascii")
+        return text
+
     def _t(self, title):
         self.set_font(self.font_name, "B", 12)
         self.set_fill_color(41, 128, 185)
@@ -52,11 +58,11 @@ class PatientReportPDF(FPDF):
         self.ln(10)
 
     def _kv(self, k, v):
-        self.set_font(self.font_name, "B", 9); self.cell(50, 5, f"{k}: ")
-        self.set_font(self.font_name, "", 9); self.cell(140, 5, self._s(v)); self.ln(5)
+        self.set_font(self.font_name, "B", 9); self.cell(50, 5, self._safe_text(f"{k}: "))
+        self.set_font(self.font_name, "", 9); self.cell(140, 5, self._safe_text(self._s(v))); self.ln(5)
 
     def _p(self, t):
-        self.set_font(self.font_name, "", 9); self.multi_cell(0, 5, t)
+        self.set_font(self.font_name, "", 9); self.multi_cell(0, 5, self._safe_text(t))
 
     def _np(self, n=60):
         if self.get_y() > 297 - 15 - n: self.add_page()
