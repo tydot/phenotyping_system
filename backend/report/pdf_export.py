@@ -16,16 +16,44 @@ class PatientReportPDF(FPDF):
         self.patient_id = patient_id
         self.set_auto_page_break(True, 15)
         self.cjk = False
-        for name, path in [
-            ("SimSun", "C:/Windows/Fonts/simsun.ttc"),
-            ("SimHei", "C:/Windows/Fonts/simhei.ttf"),
-        ]:
-            if os.path.exists(path):
-                self.add_font(name, "", path, uni=True)
-                self.font_name = name
+        self.font_name = "Helvetica"
+
+        # 候选字体：Windows 系统 > 项目内置 > Linux 系统 > 自动下载
+        candidates = [
+            Path("C:/Windows/Fonts/simsun.ttc"),
+            Path("C:/Windows/Fonts/simhei.ttf"),
+            Path("C:/Windows/Fonts/msyh.ttc"),
+            ROOT_DIR / "backend" / "assets" / "fonts" / "NotoSansCJKsc-Regular.otf",
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+            Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
+        ]
+
+        for p in candidates:
+            if p.exists():
+                self.add_font("CJK", "", str(p), uni=True)
+                self.font_name = "CJK"
                 self.cjk = True
                 return
-        self.font_name = "Helvetica"
+
+        # 自动下载轻量 CJK 字体
+        cached = ROOT_DIR / "backend" / "assets" / "fonts" / "NotoSansCJKsc-Regular.otf"
+        if not cached.exists():
+            try:
+                import requests
+                # 使用 jsDelivr CDN 的 Noto Sans SC
+                url = "https://cdn.jsdelivr.net/gh/AimeeMao/Fonts@latest/NotoSansSC/NotoSansSC-Regular.otf"
+                r = requests.get(url, timeout=30)
+                if r.status_code == 200:
+                    cached.parent.mkdir(parents=True, exist_ok=True)
+                    cached.write_bytes(r.content)
+            except Exception:
+                pass
+
+        if cached.exists():
+            self.add_font("CJK", "", str(cached), uni=True)
+            self.font_name = "CJK"
+            self.cjk = True
+            return
 
     def header(self):
         self.set_font(self.font_name, "", 10)
@@ -168,6 +196,20 @@ class PatientReportPDF(FPDF):
         self.set_text_color(0, 0, 0)
 
 
+def _pdf_output_bytes(pdf):
+    try:
+        data = pdf.output(dest="S")
+    except TypeError:
+        data = pdf.output()
+    if isinstance(data, bytearray):
+        return bytes(data)
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, str):
+        return data.encode("latin-1")
+    raise TypeError("Unsupported PDF output type")
+
+
 def generate_patient_report_pdf(patient_id, **kwargs):
     pdf = PatientReportPDF(str(patient_id))
     pdf.add_page()
@@ -180,4 +222,4 @@ def generate_patient_report_pdf(patient_id, **kwargs):
     pdf.add_rag(kwargs.get("rag_chunks") or [])
     pdf.add_vlm(kwargs.get("vlm_findings") or [])
     pdf.add_disclaimer()
-    return bytes(pdf.output())
+    return _pdf_output_bytes(pdf)
