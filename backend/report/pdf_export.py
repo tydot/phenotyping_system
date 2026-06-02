@@ -44,6 +44,8 @@ class PatientReportPDF(FPDF):
             self.add_font("NotoSansSC", "", str(font_path), uni=True)
             if bold_path.exists():
                 self.add_font("NotoSansSC", "B", str(bold_path), uni=True)
+            else:
+                self.add_font("NotoSansSC", "B", str(font_path), uni=True)  # fallback to regular
             return "NotoSansSC"
 
         # 3. Fallback
