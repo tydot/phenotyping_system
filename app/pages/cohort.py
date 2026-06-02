@@ -258,6 +258,20 @@ st.divider()
 
 
 # ============================================================
+# 筛选器
+# ============================================================
+st.sidebar.header("队列筛选")
+show_clusters = st.sidebar.multiselect("Cluster", [0,1,2], default=[0,1,2], key="cohort_cluster_filter")
+show_boundary = st.sidebar.radio("边界状态", ["全部","仅稳定","仅边界"], key="cohort_boundary_filter")
+filtered_df = cohort_df.copy()
+if "consensus_cluster" in filtered_df.columns and show_clusters:
+    filtered_df = filtered_df[filtered_df["consensus_cluster"].isin(show_clusters)]
+if "confidence" in filtered_df.columns:
+    if show_boundary == "仅稳定": filtered_df = filtered_df[filtered_df["confidence"] >= boundary_threshold]
+    elif show_boundary == "仅边界": filtered_df = filtered_df[filtered_df["confidence"] < boundary_threshold]
+st.sidebar.caption(f"筛选后: {len(filtered_df)} / {len(cohort_df)} 患者")
+
+# ============================================================
 # Cluster 分布
 # ============================================================
 
