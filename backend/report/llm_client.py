@@ -316,7 +316,7 @@ def generate_xiaomi_mimo_report(context: Dict[str, Any]) -> str:
         ],
         temperature=0.3,
         top_p=0.9,
-        max_tokens=3000,
+        max_tokens=3500,
         stream=False,
     )
 

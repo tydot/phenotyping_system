@@ -26,6 +26,9 @@ class PatientReportPDF(FPDF):
             self.add_font("CJK", "", str(font_path), uni=True)
             self.font_name = "CJK"
             self.cjk = True
+            bold = font_path.parent / "NotoSansSC-Bold.ttf"
+            if bold.exists():
+                self.add_font("CJK", "B", str(bold), uni=True)
 
     def header(self):
         self.set_font(self.font_name, "", 10)

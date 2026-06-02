@@ -85,6 +85,15 @@ UMAP_PATH = Path(umap_file) if umap_file else None
 st.title("基于直肠测压图像的排便障碍患者亚型分类系统")
 st.caption("AI 驱动的功能表型分析科研原型系统")
 
+# 版本横幅
+col_v1, col_v2, col_v3 = st.columns(3)
+with col_v1:
+    st.metric("当前主版本", "M1", delta="公平·Attn·K4")
+with col_v2:
+    st.metric("共识分型", "3 类 (C0/C1/C2)", delta="1067 例")
+with col_v3:
+    st.metric("边界阈值", "conf < 0.8", delta="M1 零边界")
+
 st.info(
     "本系统面向排便障碍患者功能表型研究，"
     "结合图像侧无监督分型、共识分型、临床指标分析及可视化展示，"
