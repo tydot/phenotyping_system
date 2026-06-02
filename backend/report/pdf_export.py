@@ -1,7 +1,9 @@
+# backend/report/pdf_export.py
+# -*- coding: utf-8 -*-
 """
-backend/report/pdf_export.py
 Patient comprehensive report PDF export
 """
+
 import os
 from datetime import datetime
 from pathlib import Path
@@ -18,42 +20,12 @@ class PatientReportPDF(FPDF):
         self.cjk = False
         self.font_name = "Helvetica"
 
-        # 候选字体：Windows 系统 > 项目内置 > Linux 系统 > 自动下载
-        candidates = [
-            Path("C:/Windows/Fonts/simsun.ttc"),
-            Path("C:/Windows/Fonts/simhei.ttf"),
-            Path("C:/Windows/Fonts/msyh.ttc"),
-            ROOT_DIR / "backend" / "assets" / "fonts" / "NotoSansCJKsc-Regular.otf",
-            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
-            Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
-        ]
-
-        for p in candidates:
-            if p.exists():
-                self.add_font("CJK", "", str(p), uni=True)
-                self.font_name = "CJK"
-                self.cjk = True
-                return
-
-        # 自动下载轻量 CJK 字体
-        cached = ROOT_DIR / "backend" / "assets" / "fonts" / "NotoSansCJKsc-Regular.otf"
-        if not cached.exists():
-            try:
-                import requests
-                # 使用 jsDelivr CDN 的 Noto Sans SC
-                url = "https://cdn.jsdelivr.net/gh/AimeeMao/Fonts@latest/NotoSansSC/NotoSansSC-Regular.otf"
-                r = requests.get(url, timeout=30)
-                if r.status_code == 200:
-                    cached.parent.mkdir(parents=True, exist_ok=True)
-                    cached.write_bytes(r.content)
-            except Exception:
-                pass
-
-        if cached.exists():
-            self.add_font("CJK", "", str(cached), uni=True)
+        # 优先使用项目内中文字体
+        font_path = ROOT_DIR / "backend" / "assets" / "fonts" / "NotoSansCJKsc-Regular.otf"
+        if font_path.exists():
+            self.add_font("CJK", "", str(font_path), uni=True)
             self.font_name = "CJK"
             self.cjk = True
-            return
 
     def header(self):
         self.set_font(self.font_name, "", 10)
@@ -63,18 +35,26 @@ class PatientReportPDF(FPDF):
     def footer(self):
         self.set_y(-15)
         self.set_font(self.font_name, "", 8)
-        self.cell(0, 10, self._ascii(f"Page {self.page_no()} | {datetime.now().strftime('%Y-%m-%d %H:%M')}"), align="C")
+        self.cell(
+            0,
+            10,
+            self._ascii(f"Page {self.page_no()} | {datetime.now().strftime('%Y-%m-%d %H:%M')}"),
+            align="C",
+        )
 
     def _ascii(self, t):
-        if self.cjk: return str(t)
+        if self.cjk:
+            return str(t)
         try:
             return str(t).encode("ascii", errors="replace").decode("ascii")
         except Exception:
             return "?"
 
     def _s(self, v, d="-"):
-        if v is None: return d
-        if isinstance(v, float) and v != v: return d
+        if v is None:
+            return d
+        if isinstance(v, float) and v != v:
+            return d
         return str(v)
 
     def _t(self, title):
