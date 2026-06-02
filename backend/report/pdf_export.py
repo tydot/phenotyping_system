@@ -84,7 +84,8 @@ class PatientReportPDF(FPDF):
             for item in am:
                 if isinstance(item, dict):
                     self.set_font(self.font_name, "", 9)
-                    self.cell(0, 5, f"{item.get('metric','?')}: {self._s(item.get('value'))} [{item.get('state_text','?')}]")
+                    txt = f"{self._s(item.get('metric','?'))}: {self._s(item.get('value'))} [{self._s(item.get('state_text','?'))}]"
+                    self.cell(0, 5, txt)
                     self.ln(5)
         else: self._p("No abnormal metrics.")
         self.ln(2)
