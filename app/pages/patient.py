@@ -2812,6 +2812,17 @@ with tab_generated:
     )
     st.markdown(generated_report)
 
+    def _try_local_llm(ctx):
+        """尝试获取本地 LoRA 输出，5s 超时"""
+        try:
+            from backend.report.local_llm_client import generate_local_llm_report
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                f = ex.submit(generate_local_llm_report, ctx)
+                return f.result(timeout=5)
+        except Exception:
+            return None
+
     # PDF export
     if st.button("导出综合报告 PDF", key=f"pdf_{patient_id}"):
         try:
@@ -2831,6 +2842,7 @@ with tab_generated:
                 kg_paths=safe_list(llm_context.get("kg_paths")),
                 rag_chunks=safe_list(llm_context.get("rag", {}).get("retrieved_chunks")),
                 vlm_findings=image_region_findings,
+                local_report=_try_local_llm(llm_context),
             )
             st.download_button(
                 label="点击下载 PDF",

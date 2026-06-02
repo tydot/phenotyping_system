@@ -104,12 +104,38 @@ class PatientReportPDF(FPDF):
             self._p("No abnormal metrics.")
         self.ln(2)
 
-    def add_llm(self, report):
+    def add_llm(self, report, local_report=None):
         self._np(80)
-        self._t("LLM Report")
-        t = report if isinstance(report, str) else "N/A"
-        self._p(t[:4000] if len(t) > 4000 else t)
+        if local_report:
+            self._t("LLM 科研解释报告（对比）")
+            self.set_font(self.font_name, "", 9)
+            w = 90
+            x0 = self.get_x()
+            y0 = self.get_y()
+            self.cell(w, 5, self._ascii("小米 MiMo API"), align="C")
+            self.cell(w, 5, self._ascii("本地 LoRA (Qwen2.5-7B)"), align="C")
+            self.ln(6)
+            y1 = self.get_y()
+            self.set_font(self.font_name, "", 7)
+            self._np(100)
+            # 左栏 - Xiaomi
+            self.set_xy(x0, y1)
+            self.multi_cell(w, 4, self._ascii(report[:2000]) if len(report) > 2000 else self._ascii(report))
+            y_after_xiaomi = self.get_y()
+            # 右栏 - Local
+            self.set_xy(x0 + w, y1)
+            local_text = local_report if isinstance(local_report, str) else "本地 LoRA 未启动"
+            self.multi_cell(w, 4, self._ascii(local_text[:2000]) if len(local_text) > 2000 else self._ascii(local_text))
+            self.set_y(max(y_after_xiaomi, self.get_y()))
+            self.ln(4)
+        else:
+            self._t("LLM 科研解释报告")
+            t = report if isinstance(report, str) else "报告未生成"
+            self._p(t[:4000] if len(t) > 4000 else t)
         self.ln(2)
+
+    def add_llm_single(self, report):
+        self.add_llm(report, local_report=None)
 
     def add_rair(self, rair):
         self._np(40)
@@ -198,7 +224,7 @@ def generate_patient_report_pdf(patient_id, **kwargs):
     pdf.add_page()
     pdf.add_ai(kwargs.get("ai_result") or {})
     pdf.add_clinical(kwargs.get("abnormal_metrics") or [])
-    pdf.add_llm(kwargs.get("llm_report") or "N/A")
+    pdf.add_llm(kwargs.get("llm_report") or "N/A", kwargs.get("local_report"))
     pdf.add_rair(kwargs.get("rair_info") or {})
     pdf.add_rome(kwargs.get("rome") or {})
     pdf.add_kg(kwargs.get("kg_paths") or [])
