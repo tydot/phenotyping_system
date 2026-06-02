@@ -2793,12 +2793,12 @@ with tab_generated:
                     "confidence": ai.get("confidence", "-"),
                     "is_boundary": ai.get("is_boundary", False),
                 },
-                abnormal_metrics=safe_list(context.get("abnormal_metrics")),
+                abnormal_metrics=safe_list(llm_context.get("abnormal_metrics")),
                 llm_report=generated_report,
                 rair_info=rair,
                 rome=rome,
-                kg_paths=safe_list(context.get("kg_paths")),
-                rag_chunks=safe_list(rag.get("retrieved_chunks")),
+                kg_paths=safe_list(llm_context.get("kg_paths")),
+                rag_chunks=safe_list(llm_context.get("rag", {}).get("retrieved_chunks")),
                 vlm_findings=image_region_findings,
             )
             st.download_button(
