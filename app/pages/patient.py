@@ -49,6 +49,7 @@ for key in [
 
 import numpy as np
 import pandas as pd
+from datetime import datetime
 import streamlit as st
 from PIL import Image
 from backend.api.patient import get_patient_view
@@ -2779,6 +2780,36 @@ with tab_generated:
         "仅用于科研解释与系统展示。"
     )
     st.markdown(generated_report)
+
+    # PDF export
+    if st.button("导出综合报告 PDF", key=f"pdf_{patient_id}"):
+        try:
+            from backend.report.pdf_export import generate_patient_report_pdf
+            pdf_bytes = generate_patient_report_pdf(
+                patient_id=patient_id,
+                ai_result={
+                    "version": selected_version,
+                    "cluster": ai.get("cluster", "-"),
+                    "confidence": ai.get("confidence", "-"),
+                    "is_boundary": ai.get("is_boundary", False),
+                },
+                abnormal_metrics=compact_metric_judgements(safe_list(context.get("abnormal_metrics"))),
+                llm_report=generated_report,
+                rair_info=rair,
+                rome=rome,
+                kg_paths=safe_list(context.get("kg_paths")),
+                rag_chunks=safe_list(rag.get("retrieved_chunks")),
+                vlm_findings=image_region_findings,
+            )
+            st.download_button(
+                label="点击下载 PDF",
+                data=pdf_bytes,
+                file_name=f"ARM_Report_{patient_id}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+                mime="application/pdf",
+                key=f"dl_{patient_id}",
+            )
+        except Exception as e:
+            st.warning(f"PDF 生成失败: {e}")
 
 with tab_backend:
     st.markdown("**分析摘要**")
