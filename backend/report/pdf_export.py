@@ -67,7 +67,7 @@ class PatientReportPDF(FPDF):
                 pass
 
     def header(self):
-        self.set_font(self.font_name, "B", 10)
+        self.set_font(self.font_name, "", 10)
         self.cell(0, 6, f"ARM 功能表型综合报告 | 患者 {self.patient_id}", align="C")
         self.ln(8)
 
@@ -82,7 +82,7 @@ class PatientReportPDF(FPDF):
         return str(v)
 
     def _t(self, title):
-        self.set_font(self.font_name, "B", 12)
+        self.set_font(self.font_name, "", 12)
         self.set_fill_color(41, 128, 185)
         self.set_text_color(255, 255, 255)
         self.cell(0, 6, f"  {title}", fill=True)
@@ -90,8 +90,11 @@ class PatientReportPDF(FPDF):
         self.ln(10)
 
     def _kv(self, k, v):
-        self.set_font(self.font_name, "B", 9); self.cell(50, 5, f"{k}: ")
-        self.set_font(self.font_name, "", 9); self.cell(140, 5, self._s(v)); self.ln(5)
+        self.set_font(self.font_name, "", 9)
+        self.set_text_color(60, 60, 60)
+        self.cell(55, 5, f"{k}: ")
+        self.set_text_color(0, 0, 0)
+        self.cell(135, 5, self._s(v)); self.ln(5)
 
     def _p(self, t):
         self.set_font(self.font_name, "", 9); self.multi_cell(0, 5, t)
@@ -152,7 +155,7 @@ class PatientReportPDF(FPDF):
         if chunks:
             for i, ch in enumerate(chunks[:4], 1):
                 if isinstance(ch, dict):
-                    self.set_font(self.font_name, "B", 9)
+                    self.set_font(self.font_name, "", 9)
                     self.cell(0, 5, f"[{i}] {ch.get('title','文献条目')}"); self.ln(5)
                     self.set_font(self.font_name, "", 9)
                     self._p((ch.get("chunk_text","") or ch.get("text",""))[:400])
@@ -165,7 +168,7 @@ class PatientReportPDF(FPDF):
         if findings:
             for item in findings[:5]:
                 if isinstance(item, dict):
-                    self.set_font(self.font_name, "B", 9)
+                    self.set_font(self.font_name, "", 9)
                     proto = item.get("matched_protocol", item.get("region_name", "区域"))
                     self.cell(0, 5, f"协议: {proto}"); self.ln(5)
                     self.set_font(self.font_name, "", 9)
