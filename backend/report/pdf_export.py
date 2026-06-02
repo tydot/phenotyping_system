@@ -38,8 +38,11 @@ class PatientReportPDF(FPDF):
         self.cell(0, 10, self._ascii(f"Page {self.page_no()} | {datetime.now().strftime('%Y-%m-%d %H:%M')}"), align="C")
 
     def _ascii(self, t):
-        if self.cjk: return t
-        return str(t).encode("ascii", errors="replace").decode("ascii")
+        if self.cjk: return str(t)
+        try:
+            return str(t).encode("ascii", errors="replace").decode("ascii")
+        except Exception:
+            return "?"
 
     def _s(self, v, d="-"):
         if v is None: return d
@@ -177,4 +180,4 @@ def generate_patient_report_pdf(patient_id, **kwargs):
     pdf.add_rag(kwargs.get("rag_chunks") or [])
     pdf.add_vlm(kwargs.get("vlm_findings") or [])
     pdf.add_disclaimer()
-    return pdf.output()
+    return bytes(pdf.output())
