@@ -41,7 +41,10 @@ class PatientReportPDF(FPDF):
     def _s(self, v, d="-"):
         if v is None: return d
         if isinstance(v, float) and v != v: return d
-        return str(v)
+        s = str(v)
+        if self.font_name == "Helvetica":
+            s = s.encode("ascii", errors="replace").decode("ascii")
+        return s
 
     def _safe_text(self, text):
         """If no Chinese font, strip to ASCII"""
