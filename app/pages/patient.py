@@ -2630,6 +2630,37 @@ if seed_assignments and not is_patient_user:
 elif not seed_assignments and not is_patient_user:
     st.caption("当前未接入逐 seed 标签分配结果。")
 
+# M1-M5 版本对比
+with st.expander(f"查看患者 {patient_id} 在 M1-M5 版本间的分型变化"):
+    try:
+        import pandas as pd
+        rows = []
+        for ver in ["M1", "M2", "M3", "M4", "M5"]:
+            c = pd.read_csv(ROOT_DIR / "processed" / ver / "consensus_labels.csv")
+            c["patient_id"] = c["patient_id"].astype(str)
+            r = c[c["patient_id"] == str(patient_id)]
+            if len(r) > 0:
+                cl = int(r.iloc[0]["consensus_cluster"])
+                cf = r.iloc[0]["confidence"]
+                rows.append({"版本": ver, "Cluster": cl, "Confidence": f"{cf:.2f}"})
+        if rows:
+            df_v = pd.DataFrame(rows)
+            cols = st.columns(len(rows))
+            for i, (_, row) in enumerate(df_v.iterrows()):
+                with cols[i]:
+                    delta = ""
+                    if i > 0:
+                        prev_cl = int(df_v.iloc[i-1]["Cluster"])
+                        if row["Cluster"] != prev_cl:
+                            delta = f"← C{prev_cl}"
+                    st.metric(
+                        f"M{i+1}", f"Cluster {int(row['Cluster'])}",
+                        delta=delta if delta else None
+                    )
+            st.caption("Arrows indicate cluster changes from previous version")
+    except Exception:
+        st.caption("版本对比数据暂不可用")
+
 with col_d:
     st.subheader("外部临床参考（Rome IV 代理分类）")
     if not rome or rome.get("category") is None:

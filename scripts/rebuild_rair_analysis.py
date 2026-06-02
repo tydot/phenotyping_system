@@ -66,11 +66,17 @@ def run_kruskal_rair(df, tag, out_dir):
     }
 
     # 绘制 boxplot
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+    plt.rcParams['axes.unicode_minus'] = False
     plt.figure(figsize=(6, 4), dpi=150)
-    sns.boxplot(data=df, x='consensus_cluster', y='relaxation_amplitude', showfliers=False)
+    ax = sns.boxplot(data=df, x='consensus_cluster', y='relaxation_amplitude', showfliers=False,
+                     palette=['#E63946', '#457B9D', '#2A9D8F'])
     sns.stripplot(data=df, x='consensus_cluster', y='relaxation_amplitude',
                   color='black', alpha=0.4, size=2)
-    plt.title(f'RAIR relaxation amplitude by cluster ({tag})')
+    tag_cn = '全部患者' if tag == 'all' else '稳定患者'
+    plt.title(f'RAIR 松弛幅度分布（{tag_cn}）')
+    plt.xlabel('共识簇')
+    plt.ylabel('松弛幅度（代理信号）')
     plt.tight_layout()
     plt.savefig(out_dir / f'rair_amplitude_by_cluster_{tag}.png', dpi=300)
     plt.close()
