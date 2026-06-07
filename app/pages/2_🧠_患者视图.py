@@ -2710,8 +2710,8 @@ if not is_patient_user:
     st.subheader("群体统计参考")
     st.info(f"版本：{version}\n\n{summary}\n\n{suggestion}")
     st.page_link(
-        "pages/4_Statistics_View.py",
-        label="打开 Statistics View 查看完整统计结果",
+        "pages/4_📊_统计分析.py",
+        label="打开统计分析页查看完整统计结果",
         icon="📊"
     )
     st.divider()

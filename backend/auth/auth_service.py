@@ -299,7 +299,7 @@ def require_login() -> Dict:
     ensure_auth_state()
     if not st.session_state.logged_in or not st.session_state.current_user:
         st.warning("请先登录后再访问该页面。")
-        st.page_link("pages/0_login_register.py", label="前往登录页", icon="🔐")
+        st.page_link("pages/0_🔐_登录注册.py", label="前往登录页", icon="🔐")
         st.stop()
 
     return st.session_state.current_user
