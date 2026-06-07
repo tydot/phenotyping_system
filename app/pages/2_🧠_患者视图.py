@@ -2207,7 +2207,7 @@ if (not patient) and version_patient_result:
 # -----------------------------
 # AI phenotype assignment
 # -----------------------------
-st.subheader("AI 表型分配结果（Phenotype Assignment）")
+st.subheader("AI 表型分配结果")
 col1, col2, col3 = st.columns(3)
 
 cluster_val = ai.get("cluster")
@@ -2266,11 +2266,11 @@ desc_metrics = safe_dict(phys.get("descriptive_metrics"))
 col_left, col_right = st.columns(2)
 
 with col_left:
-    st.markdown("**核心功能指标（Definition Axes）**")
+    st.markdown("**核心功能指标**")
     show_metric_table(core_metrics, digits=2, empty_text="暂无核心 ARM 功能指标。")
 
 with col_right:
-    st.markdown("**描述性指标（Characterization Axes）**")
+    st.markdown("**描述性指标**")
     show_metric_table(desc_metrics, digits=2, empty_text="暂无描述性 ARM 指标。")
 
 st.markdown("**医院报告参考范围判定**")
@@ -2499,14 +2499,14 @@ st.divider()
 col_a, col_b = st.columns(2)
 
 with col_a:
-    st.subheader("ARM 协议阶段贡献（Representation Contribution）")
+    st.subheader("ARM 协议阶段贡献")
     protocol_contrib = representation.get("protocol_contribution", {})
     protocol_topk_details = safe_list(representation.get("protocol_topk_details"))
 
     if not protocol_contrib:
         st.caption("暂无各协议阶段对患者表征的贡献信息。")
     elif isinstance(protocol_contrib, dict) and protocol_contrib.get("available") is False:
-        st.caption(protocol_contrib.get("message", "当前患者页暂未接入协议级 attention 贡献明细。"))
+        st.caption(protocol_contrib.get("message", "当前患者页暂未接入协议级注意力贡献明细。"))
     else:
         numeric_items = {
             k: v for k, v in safe_dict(protocol_contrib).items()
@@ -2657,7 +2657,7 @@ with st.expander(f"查看患者 {patient_id} 在 M1-M5 版本间的分型变化"
                         f"M{i+1}", f"Cluster {int(row['Cluster'])}",
                         delta=delta if delta else None
                     )
-            st.caption("Arrows indicate cluster changes from previous version")
+            st.caption("箭头表示与上一版本相比的分型簇变化")
     except Exception:
         st.caption("版本对比数据暂不可用")
 

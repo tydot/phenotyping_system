@@ -12,7 +12,7 @@ from backend.auth.auth_service import require_role
 from backend.version_manager import select_version_sidebar, safe_read_csv, resolve_path
 
 
-st.set_page_config(page_title="Statistics View", layout="wide")
+st.set_page_config(page_title="统计分析 | ARM 功能表型系统", layout="wide")
 
 
 # ============================================================
@@ -222,7 +222,7 @@ population = st.selectbox(
     format_func=lambda x: "全部患者" if x == "all" else "稳定患者 (confidence≥0.8)",
 )
 if population == "stable" and version_short_name == "M1":
-    st.caption("M1 全部患者 confidence=1.0，两部分结果相同")
+    st.caption("M1 全部患者置信度=1.0，两部分结果相同")
 
 kruskal_show = kruskal_show[kruskal_show["分析人群"] == population] if kruskal_show is not None and not kruskal_show.empty and "分析人群" in kruskal_show.columns else kruskal_show
 dunn_show = dunn_show[dunn_show["分析人群"] == population] if dunn_show is not None and not dunn_show.empty and "分析人群" in dunn_show.columns else dunn_show

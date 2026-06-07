@@ -162,7 +162,7 @@ def normalize_cohort_df(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-st.set_page_config(page_title="Cohort Overview", layout="wide")
+st.set_page_config(page_title="总体队列视图 | ARM 功能表型系统", layout="wide")
 
 
 # ============================================================
@@ -188,7 +188,7 @@ selected_version, current_version, current_files = select_version_sidebar(
 
 st.title("📦 总体队列视图")
 st.caption(
-    f"基于 patient_clinical 临床联合表的 cohort 总览｜当前用户：{user.get('username', '-')}"
+    f"基于临床联合表的队列总览｜当前用户：{user.get('username', '-')}"
 )
 
 st.info(
@@ -261,7 +261,7 @@ st.divider()
 # 筛选器
 # ============================================================
 st.sidebar.header("队列筛选")
-show_clusters = st.sidebar.multiselect("Cluster", [0,1,2], default=[0,1,2], key="cohort_cluster_filter")
+show_clusters = st.sidebar.multiselect("分型簇", [0,1,2], default=[0,1,2], key="cohort_cluster_filter")
 show_boundary = st.sidebar.radio("边界状态", ["全部","仅稳定","仅边界"], key="cohort_boundary_filter")
 filtered_df = cohort_df.copy()
 if "consensus_cluster" in filtered_df.columns and show_clusters:
@@ -275,7 +275,7 @@ st.sidebar.caption(f"筛选后: {len(filtered_df)} / {len(cohort_df)} 患者")
 # Cluster 分布
 # ============================================================
 
-st.subheader("Cluster 分布")
+st.subheader("分型簇分布")
 
 if "consensus_cluster" not in cohort_df.columns or cohort_df["consensus_cluster"].dropna().empty:
     st.warning("暂无 cluster 分布数据。")

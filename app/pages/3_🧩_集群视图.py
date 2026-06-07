@@ -493,7 +493,7 @@ if not cluster_values:
 
 st.sidebar.header("集群选择")
 cluster_id = st.sidebar.selectbox(
-    "选择集群（Cluster）",
+    "选择集群",
     options=cluster_values,
     index=0,
 )
@@ -508,7 +508,7 @@ population_cluster = st.sidebar.radio(
     key="cluster_population",
 )
 if population_cluster == "stable" and selected_version.startswith("M1_"):
-    st.sidebar.caption("M1 全部患者 confidence=1.0，两部分结果相同")
+    st.sidebar.caption("M1 全部患者置信度=1.0，两部分结果相同")
 
 # 应用人群过滤
 if population_cluster == "stable":
@@ -578,7 +578,7 @@ st.divider()
 # 核心功能指标画像
 # ============================================================
 
-st.subheader("核心功能指标画像（Core Functional Profile）")
+st.subheader("核心功能指标画像")
 
 df_profile = build_kv_df(profile, "指标", "中位数")
 
@@ -597,7 +597,7 @@ st.divider()
 # 稳定性与数据完整性
 # ============================================================
 
-st.subheader("稳定性与数据完整性（Stability / Data Completeness）")
+st.subheader("稳定性与数据完整性")
 
 st.caption(
     "本模块仅展示边界患者比例和核心功能指标缺失情况；"
@@ -651,7 +651,7 @@ st.divider()
 # RAIR 统计
 # ============================================================
 
-st.subheader("RAIR 相关统计（RAIR-related Statistics）")
+st.subheader("RAIR 相关统计")
 
 if rair_stats_df is None or rair_stats_df.empty:
     st.info("当前版本未识别到可用的 RAIR 数值列。请在调试区查看原始列名。")

@@ -16,7 +16,7 @@ from backend.version_manager import (
 )
 
 
-st.set_page_config(page_title="Stability View | ARM 功能表型系统", layout="wide")
+st.set_page_config(page_title="稳定性分析 | ARM 功能表型系统", layout="wide")
 
 
 # ============================================================
@@ -226,9 +226,9 @@ def build_confidence_distribution(df: pd.DataFrame) -> pd.DataFrame:
 # 页面标题
 # ============================================================
 
-st.title("📊 Stability View")
+st.title("📊 稳定性分析")
 st.caption(
-    f"基于 patient consensus 结果的群体稳定性与边界患者分析｜当前用户：{user.get('username', '-')}"
+    f"基于患者共识聚类结果的群体稳定性与边界患者分析｜当前用户：{user.get('username', '-')}"
 )
 
 st.info(
@@ -317,12 +317,12 @@ st.divider()
 left, right = st.columns(2)
 
 with left:
-    st.subheader("各 Cluster 稳定性")
+    st.subheader("各分型簇稳定性")
 
     cluster_stability_df = build_cluster_stability(consensus_df)
 
     if cluster_stability_df.empty:
-        st.caption("暂无各 cluster 稳定性结果。")
+        st.caption("暂无各分型簇稳定性结果。")
     else:
         chart_df = cluster_stability_df[["Cluster", "稳定比例"]].copy()
         st.bar_chart(chart_df.set_index("Cluster"))
@@ -333,12 +333,12 @@ with left:
         st.dataframe(show_df, use_container_width=True, hide_index=True)
 
 with right:
-    st.subheader("Confidence 分布")
+    st.subheader("置信度分布")
 
     conf_dist_df = build_confidence_distribution(consensus_df)
 
     if conf_dist_df.empty:
-        st.caption("暂无 confidence 分布结果。")
+        st.caption("暂无置信度分布结果。")
     else:
         st.bar_chart(conf_dist_df.set_index("confidence区间"))
         st.dataframe(conf_dist_df, use_container_width=True, hide_index=True)
@@ -403,7 +403,7 @@ else:
         "边界患者提示其处于不同功能亚型之间的过渡区域，后续解释时应结合具体临床指标。"
     )
 
-st.markdown("**Cluster 分析**")
+st.markdown("**分型簇分析**")
 if not cluster_stability_df.empty:
     best_row = cluster_stability_df.sort_values("稳定比例", ascending=False).iloc[0]
     weak_row = cluster_stability_df.sort_values("稳定比例", ascending=True).iloc[0]
@@ -415,7 +415,7 @@ if not cluster_stability_df.empty:
 else:
     st.write("暂无 Cluster 稳定性分析。")
 
-st.markdown("**Confidence 分析**")
+st.markdown("**置信度分析**")
 if "confidence" in consensus_df.columns:
     conf_series = pd.to_numeric(consensus_df["confidence"], errors="coerce").dropna()
     if not conf_series.empty:
@@ -440,4 +440,4 @@ st.divider()
 with st.expander("调试：查看标准化后的 Stability 数据"):
     st.dataframe(consensus_df, use_container_width=True, hide_index=True)
 
-st.caption("⚠️ Stability View 反映的是多随机种子下聚类一致性，不等同于临床诊断确定性。")
+st.caption("⚠️ 稳定性分析反映的是多随机种子下聚类一致性，不等同于临床诊断确定性。")

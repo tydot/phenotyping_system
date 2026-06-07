@@ -238,7 +238,7 @@ if st.button("开始分型分析", use_container_width=True):
         st.markdown("**参与推理的协议**")
         st.write(", ".join(result.get("protocols_used", [])) if result.get("protocols_used") else "无")
 
-        st.markdown("**协议内 attention 明细**")
+        st.markdown("**协议内注意力明细**")
         detail_rows = result.get("protocol_attention_details", [])
         if detail_rows:
             df_detail = pd.DataFrame(detail_rows)
